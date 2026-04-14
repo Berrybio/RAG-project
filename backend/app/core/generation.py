@@ -16,7 +16,9 @@ When answering questions:
 3. If the retrieved data doesn't contain enough information to answer, say so clearly.
 4. Provide structured, easy-to-read responses.
 5. Highlight important eligibility criteria when relevant.
-6. Mention the trial phase, status, and location when helpful."""
+6. Mention the trial phase, status, location, sponsor, and PI when helpful.
+7. When discussing interventions, include drug aliases if available.
+8. Reference primary outcomes and study design details when relevant."""
 
 
 def format_context(retrieved_docs: list[dict]) -> str:
@@ -24,22 +26,60 @@ def format_context(retrieved_docs: list[dict]) -> str:
     context_parts = []
     for i, doc in enumerate(retrieved_docs, 1):
         meta = doc["metadata"]
-        context_parts.append(
-            f"--- Trial {i} (Relevance: {doc['score']:.3f}) ---\n"
-            f"NCT ID: {meta['nctId']}\n"
-            f"Title: {meta['title']}\n"
-            f"Phase: {meta['phases']}\n"
-            f"Status: {meta['status']}\n"
-            f"Conditions: {meta['conditions']}\n"
-            f"Intervention: {meta['interventionName']}\n"
-            f"Enrollment: {meta['enrollmentCont']}\n"
-            f"Eligible Sex: {meta['sex']}\n"
-            f"Minimum Age: {meta['minimumAge']}\n"
-            f"Location: {meta['locationInfo']}\n"
-            f"Contact: {meta['contactInfo']}\n"
-            f"\nFull Details:\n{doc['text'][:2000]}\n"
-        )
-    return "\n".join(context_parts)
+
+        # Build a structured summary from metadata
+        lines = [
+            f"--- Trial {i} (Relevance: {doc['score']:.3f}) ---",
+            f"NCT ID: {meta.get('nctId', '')}",
+            f"Title: {meta.get('title', '')}",
+        ]
+        # Only include non-empty fields
+        field_map = [
+            ("Official Title", "officialTitle"),
+            ("Acronym", "acronym"),
+            ("Phase", "phases"),
+            ("Status", "status"),
+            ("Study Type", "studyType"),
+            ("Conditions", "conditions"),
+            ("Keywords", "keywords"),
+            ("MeSH Terms", "meshTermsCondition"),
+            ("Allocation", "allocation"),
+            ("Intervention Model", "interventionModel"),
+            ("Primary Purpose", "primaryPurpose"),
+            ("Masking", "masking"),
+            ("Intervention", "interventionName"),
+            ("Intervention Type", "interventionType"),
+            ("Drug Aliases", "interventionOtherNames"),
+            ("Arm Groups", "armGroups"),
+            ("Enrollment", "enrollmentCont"),
+            ("Enrollment Type", "enrollmentType"),
+            ("Eligible Sex", "sex"),
+            ("Minimum Age", "minimumAge"),
+            ("Maximum Age", "maximumAge"),
+            ("Primary Outcomes", "primaryOutcomes"),
+            ("Secondary Outcomes", "secondaryOutcomes"),
+            ("Sponsor", "sponsorName"),
+            ("Sponsor Class", "sponsorClass"),
+            ("PI", "piName"),
+            ("PI Affiliation", "piAffiliation"),
+            ("Start Date", "startDate"),
+            ("Completion Date", "completionETA"),
+            ("Last Updated", "lastUpdateDate"),
+            ("Location Countries", "locationCountries"),
+            ("Number of Sites", "locationCount"),
+            ("Locations", "locationInfo"),
+            ("Contact", "contactInfo"),
+            ("FDA Regulated Drug", "isFdaRegulatedDrug"),
+        ]
+        for label, key in field_map:
+            val = meta.get(key, "")
+            if val and str(val) not in ("", "0", "False"):
+                lines.append(f"{label}: {val}")
+
+        lines.append(f"\nFull Details:\n{doc['text'][:3000]}")
+        context_parts.append("\n".join(lines))
+
+    return "\n\n".join(context_parts)
 
 
 def _build_user_message(query: str, retrieved_docs: list[dict]) -> str:
