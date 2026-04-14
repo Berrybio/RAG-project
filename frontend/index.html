@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinical Trial RAG</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>Clinical Trial RAG</h1>
+        <p class="subtitle">Breast Cancer Phase II Trial Search & Protocol Generator</p>
+        <nav>
+            <button class="tab active" data-tab="search">Trial Search</button>
+            <button class="tab" data-tab="protocol">Protocol Generator</button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- Search Tab -->
+        <section id="search-tab" class="tab-content active">
+            <div class="input-group">
+                <textarea id="search-query" placeholder="Ask about clinical trials, e.g. 'What trials are available for triple-negative breast cancer?'" rows="3"></textarea>
+                <div class="controls">
+                    <label>
+                        Top K:
+                        <input type="range" id="search-topk" min="1" max="20" value="5">
+                        <span id="search-topk-val">5</span>
+                    </label>
+                    <button id="search-btn" class="primary-btn">Search</button>
+                </div>
+            </div>
+
+            <div class="examples">
+                <span>Try:</span>
+                <button class="example-btn" data-query="What clinical trials are available for triple-negative breast cancer?">TNBC trials</button>
+                <button class="example-btn" data-query="Are there any immunotherapy trials for HER2-positive breast cancer?">HER2+ immunotherapy</button>
+                <button class="example-btn" data-query="Find trials that accept patients over 65 years old">Age 65+</button>
+                <button class="example-btn" data-query="What trials are using CDK4/6 inhibitors?">CDK4/6 inhibitors</button>
+                <button class="example-btn" data-query="Are there clinical trials available in New York?">New York trials</button>
+            </div>
+
+            <div id="search-answer" class="answer-box hidden">
+                <h3>Answer</h3>
+                <div id="answer-content" class="markdown-content"></div>
+            </div>
+
+            <div id="search-sources" class="sources-box hidden">
+                <h3>Source Trials <span id="source-count"></span></h3>
+                <div id="sources-list"></div>
+            </div>
+        </section>
+
+        <!-- Protocol Tab -->
+        <section id="protocol-tab" class="tab-content">
+            <div class="input-group">
+                <textarea id="protocol-query" placeholder="Describe the trial you want to plan, e.g. 'A CDK4/6 inhibitor trial for HR+/HER2- metastatic breast cancer in postmenopausal women'" rows="3"></textarea>
+                <div class="controls">
+                    <label>
+                        Reference Trials:
+                        <input type="range" id="protocol-topk" min="1" max="20" value="5">
+                        <span id="protocol-topk-val">5</span>
+                    </label>
+                    <button id="protocol-btn" class="primary-btn">Generate Protocol</button>
+                </div>
+            </div>
+
+            <div id="protocol-loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Generating protocol with Claude... This may take 15-30 seconds.</p>
+            </div>
+
+            <div id="protocol-result" class="hidden">
+                <div class="protocol-actions">
+                    <button id="download-docx-btn" class="primary-btn">Download as Word Document</button>
+                    <button id="toggle-json-btn" class="secondary-btn">Show JSON</button>
+                </div>
+
+                <div id="protocol-preview"></div>
+
+                <div id="protocol-json" class="hidden">
+                    <pre><code id="protocol-json-content"></code></pre>
+                </div>
+
+                <div id="protocol-refs" class="sources-box hidden">
+                    <h3>Reference Trials Used</h3>
+                    <div id="protocol-refs-list"></div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Powered by Claude &middot; Data from ClinicalTrials.gov</p>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
