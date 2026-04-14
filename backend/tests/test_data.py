@@ -24,3 +24,20 @@ def test_build_documents(sample_csv):
     assert meta["nctId"] == "NCT00000001"
     assert meta["phases"] == "PHASE2"
     assert meta["status"] == "RECRUITING"
+
+    # New fields in text (for TF-IDF indexing)
+    assert "IBRANCE" in doc["text"]           # drug alias
+    assert "MeSH Condition Terms" in doc["text"]  # MeSH terms
+    assert "Sponsor" in doc["text"]
+    assert "Principal Investigator" in doc["text"]
+    assert "Primary Outcomes" in doc["text"]
+
+    # New fields in metadata
+    assert meta["sponsorName"] == "National Cancer Institute"
+    assert meta["sponsorClass"] == "NIH"
+    assert meta["piName"] == "Dr. Smith"
+    assert meta["studyType"] == "INTERVENTIONAL"
+    assert meta["allocation"] == "RANDOMIZED"
+    assert meta["interventionOtherNames"] == "IBRANCE"
+    assert meta["primaryOutcomes"] != ""
+    assert meta["locationCountries"] == "United States"

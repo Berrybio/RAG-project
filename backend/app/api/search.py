@@ -13,18 +13,45 @@ router = APIRouter()
 def _to_source_doc(doc: dict) -> SourceDoc:
     meta = doc["metadata"]
     return SourceDoc(
-        nct_id=meta["nctId"],
-        title=meta["title"],
+        nct_id=meta.get("nctId", ""),
+        title=meta.get("title", ""),
         score=doc["score"],
-        phases=meta["phases"],
-        status=meta["status"],
-        conditions=meta["conditions"],
-        intervention=meta["interventionName"],
-        enrollment=str(meta["enrollmentCont"]),
-        sex=meta["sex"],
-        minimum_age=meta["minimumAge"],
-        location=meta["locationInfo"],
-        contact=meta["contactInfo"],
+        # Status & design
+        phases=meta.get("phases", ""),
+        status=meta.get("status", ""),
+        study_type=meta.get("studyType", ""),
+        allocation=meta.get("allocation", ""),
+        masking=meta.get("masking", ""),
+        primary_purpose=meta.get("primaryPurpose", ""),
+        # Conditions
+        conditions=meta.get("conditions", ""),
+        keywords=meta.get("keywords", ""),
+        # Interventions
+        intervention=meta.get("interventionName", ""),
+        intervention_type=meta.get("interventionType", ""),
+        drug_aliases=meta.get("interventionOtherNames", ""),
+        # Enrollment & eligibility
+        enrollment=str(meta.get("enrollmentCont", "")),
+        enrollment_type=meta.get("enrollmentType", ""),
+        sex=meta.get("sex", ""),
+        minimum_age=meta.get("minimumAge", ""),
+        maximum_age=meta.get("maximumAge", ""),
+        # Outcomes
+        primary_outcomes=meta.get("primaryOutcomes", ""),
+        # Sponsor & PI
+        sponsor=meta.get("sponsorName", ""),
+        sponsor_class=meta.get("sponsorClass", ""),
+        pi_name=meta.get("piName", ""),
+        pi_affiliation=meta.get("piAffiliation", ""),
+        # Dates
+        start_date=meta.get("startDate", ""),
+        completion_date=meta.get("completionETA", ""),
+        last_updated=meta.get("lastUpdateDate", ""),
+        # Location & contact
+        location=meta.get("locationInfo", ""),
+        location_countries=meta.get("locationCountries", ""),
+        location_count=meta.get("locationCount", 0),
+        contact=meta.get("contactInfo", ""),
     )
 
 

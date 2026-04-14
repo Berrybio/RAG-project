@@ -1,0 +1,875 @@
+{
+  "timestamp": "2026-04-14T15:55:37.347518",
+  "config": {
+    "csv_path": "data/breast_cancer_trials_full_2026-04-14.csv",
+    "num_trials": 16248,
+    "top_k": 10,
+    "model": "claude-sonnet-4-20250514",
+    "num_eval_queries": 20
+  },
+  "retrieval": {
+    "hit_rate": 0.9,
+    "mrr": 0.875,
+    "avg_precision": 0.82,
+    "per_category": {
+      "condition_specific": {
+        "count": 4,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 0.825
+      },
+      "drug_specific": {
+        "count": 4,
+        "hit_rate": 0.75,
+        "mrr": 0.75,
+        "avg_precision": 0.75
+      },
+      "eligibility": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "location": {
+        "count": 2,
+        "hit_rate": 0.5,
+        "mrr": 0.5,
+        "avg_precision": 0.5
+      },
+      "outcomes": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "semantic": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "sponsor": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 0.75,
+        "avg_precision": 0.65
+      },
+      "study_design": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 0.9
+      }
+    },
+    "details": [
+      {
+        "query": "CDK4/6 inhibitor trials for hormone receptor positive breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT05795335",
+          "NCT05276713",
+          "NCT07180056",
+          "NCT06791161",
+          "NCT05766410",
+          "NCT06338605",
+          "NCT07180160",
+          "NCT04276272",
+          "NCT04095390",
+          "NCT05816655"
+        ],
+        "top_k_scores": [
+          0.3707767547399747,
+          0.31794872651865674,
+          0.2925898560009817,
+          0.2830555732937438,
+          0.2707770232988284,
+          0.25142174410774654,
+          0.24687606427391165,
+          0.23230841945404368,
+          0.22362832464301258,
+          0.22334826907442484
+        ],
+        "expected_nct_ids": [
+          "NCT04567420"
+        ],
+        "expected_keywords": [],
+        "hit": false,
+        "reciprocal_rank": 0.0,
+        "precision": 0.0,
+        "keyword_hits": {}
+      },
+      {
+        "query": "pembrolizumab immunotherapy trials for triple negative breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT04634747",
+          "NCT05769491",
+          "NCT05910710",
+          "NCT06318507",
+          "NCT07523789",
+          "NCT06880029",
+          "NCT04250818",
+          "NCT06418139",
+          "NCT07188246",
+          "NCT07011823"
+        ],
+        "top_k_scores": [
+          0.3887526329377134,
+          0.3104480614919643,
+          0.3090496997696058,
+          0.2891506740826726,
+          0.27708554281436476,
+          0.26606533913388325,
+          0.2626608549400316,
+          0.2530253358675269,
+          0.24249432350310304,
+          0.240512778860334
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pembrolizumab",
+          "triple negative",
+          "TNBC"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pembrolizumab": 1,
+          "triple negative": 1,
+          "TNBC": 1
+        }
+      },
+      {
+        "query": "trastuzumab deruxtecan T-DXd for HER2 positive breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT05149014",
+          "NCT07180264",
+          "NCT07281001",
+          "NCT05458401",
+          "NCT06928818",
+          "NCT07049133",
+          "NCT06504719",
+          "NCT05594082",
+          "NCT06231693",
+          "NCT06797622"
+        ],
+        "top_k_scores": [
+          0.4658514169157805,
+          0.4538243673086004,
+          0.4531596960150136,
+          0.42749642992739606,
+          0.4205466285331635,
+          0.40720741695248797,
+          0.38245065570353964,
+          0.3786160796954171,
+          0.36537233061745117,
+          0.33785713449016824
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "trastuzumab",
+          "HER2",
+          "T-DXd",
+          "Enhertu"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "trastuzumab": 1,
+          "HER2": 1,
+          "T-DXd": 3,
+          "Enhertu": 1
+        }
+      },
+      {
+        "query": "PARP inhibitor olaparib trials for BRCA mutated breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT02681562",
+          "NCT00679783",
+          "NCT06065059",
+          "NCT00516724",
+          "NCT03025035",
+          "NCT05775549",
+          "NCT03123211",
+          "NCT06791161",
+          "NCT01623349",
+          "NCT05258747"
+        ],
+        "top_k_scores": [
+          0.26115606989052736,
+          0.25512008926522184,
+          0.249267172212473,
+          0.24891418049376893,
+          0.23591673400658772,
+          0.23355213663318639,
+          0.2293392578682984,
+          0.2292605301154353,
+          0.2187983889614523,
+          0.21762099646159896
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "PARP",
+          "olaparib",
+          "BRCA"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "PARP": 1,
+          "olaparib": 1,
+          "BRCA": 1
+        }
+      },
+      {
+        "query": "clinical trials for inflammatory breast cancer",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT04569955",
+          "NCT06131632",
+          "NCT05931042",
+          "NCT05769491",
+          "NCT05833802",
+          "NCT05760183",
+          "NCT02324088",
+          "NCT00340158",
+          "NCT00646555",
+          "NCT00880503"
+        ],
+        "top_k_scores": [
+          0.21826019525888263,
+          0.2127732376813001,
+          0.20142147566217986,
+          0.20114875421328396,
+          0.1677005734361486,
+          0.1660515022573494,
+          0.16522092830332835,
+          0.15612277474055883,
+          0.1514505198291029,
+          0.1509271212053789
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "inflammatory",
+          "breast cancer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "inflammatory": 2,
+          "breast cancer": 1
+        }
+      },
+      {
+        "query": "trials for breast cancer that has spread to the brain",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT07503704",
+          "NCT00624156",
+          "NCT01182519",
+          "NCT01479946",
+          "NCT04364672",
+          "NCT01588821",
+          "NCT01996046",
+          "NCT02598427",
+          "NCT07397585",
+          "NCT01952054"
+        ],
+        "top_k_scores": [
+          0.28622703224248314,
+          0.16165131362777962,
+          0.14812470050713403,
+          0.14657212779411888,
+          0.14600635837203146,
+          0.1345060678554342,
+          0.13098595402680888,
+          0.1296879479852407,
+          0.12775471092454402,
+          0.1237076854015022
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "brain metast",
+          "CNS"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.5,
+        "keyword_hits": {
+          "brain metast": 1,
+          "CNS": 8
+        }
+      },
+      {
+        "query": "neoadjuvant treatment trials before breast cancer surgery",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT05360290",
+          "NCT02017496",
+          "NCT03779022",
+          "NCT06394050",
+          "NCT02823015",
+          "NCT03833960",
+          "NCT01771497",
+          "NCT03015649",
+          "NCT00210197",
+          "NCT05798806"
+        ],
+        "top_k_scores": [
+          0.18300187080763752,
+          0.1786576153769282,
+          0.17764481388013487,
+          0.17758706965112595,
+          0.174413111912241,
+          0.1732807484999803,
+          0.17295821630950972,
+          0.17162707892117618,
+          0.1702423197765216,
+          0.16381111738423992
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "neoadjuvant"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.8,
+        "keyword_hits": {
+          "neoadjuvant": 1
+        }
+      },
+      {
+        "query": "male breast cancer clinical trials",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT03240510",
+          "NCT05769491",
+          "NCT00773669",
+          "NCT05760183",
+          "NCT04569955",
+          "NCT07040891",
+          "NCT05351424",
+          "NCT02529280",
+          "NCT02808598",
+          "NCT01703520"
+        ],
+        "top_k_scores": [
+          0.2976613887706356,
+          0.24560403331567326,
+          0.23435345755586998,
+          0.22905093233309975,
+          0.22577346616965924,
+          0.2101428463330269,
+          0.18769259562506888,
+          0.18727188057632554,
+          0.18510800005283076,
+          0.17618638841255188
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "male",
+          "breast cancer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "male": 1,
+          "breast cancer": 1
+        }
+      },
+      {
+        "query": "breast cancer trials that accept patients over 70 years old",
+        "category": "eligibility",
+        "top_k_ids": [
+          "NCT05103293",
+          "NCT00263705",
+          "NCT01299987",
+          "NCT04569955",
+          "NCT07029646",
+          "NCT04906330",
+          "NCT04510532",
+          "NCT04033965",
+          "NCT06891651",
+          "NCT06080620"
+        ],
+        "top_k_scores": [
+          0.17277987035488726,
+          0.16906568070076766,
+          0.15629016822245773,
+          0.15196168702921695,
+          0.1506263702614856,
+          0.14587016773399517,
+          0.14576524166545982,
+          0.1420083856991327,
+          0.1403444415373616,
+          0.1389567971524214
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "age",
+          "elderly",
+          "older"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "age": 1,
+          "elderly": 2,
+          "older": 2
+        }
+      },
+      {
+        "query": "breast cancer trials for pregnant women",
+        "category": "eligibility",
+        "top_k_ids": [
+          "NCT03897270",
+          "NCT01503034",
+          "NCT00196833",
+          "NCT07448025",
+          "NCT07191496",
+          "NCT02559362",
+          "NCT02749474",
+          "NCT05760183",
+          "NCT05769491",
+          "NCT02774915"
+        ],
+        "top_k_scores": [
+          0.180410612807834,
+          0.15640775665693618,
+          0.14992650407331676,
+          0.14848751680747846,
+          0.14657996048970356,
+          0.14085035093872797,
+          0.13553558702367072,
+          0.12966989338246024,
+          0.12841114371239223,
+          0.12540323665648012
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pregnant",
+          "pregnancy"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pregnant": 1,
+          "pregnancy": 2
+        }
+      },
+      {
+        "query": "randomized phase 3 breast cancer trials",
+        "category": "study_design",
+        "top_k_ids": [
+          "NCT01262274",
+          "NCT00776724",
+          "NCT02207335",
+          "NCT04803266",
+          "NCT04569955",
+          "NCT06535893",
+          "NCT05769491",
+          "NCT00003678",
+          "NCT00041223",
+          "NCT02838238"
+        ],
+        "top_k_scores": [
+          0.14303605688293652,
+          0.13072423204944383,
+          0.13065007041308033,
+          0.12406307253339646,
+          0.12330515772326879,
+          0.12288629684736385,
+          0.1208715174255263,
+          0.12076774847762203,
+          0.1185294966072448,
+          0.1181440602213299
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "PHASE3",
+          "RANDOMIZED"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.8,
+        "keyword_hits": {
+          "PHASE3": 2,
+          "RANDOMIZED": 1
+        }
+      },
+      {
+        "query": "double blind placebo controlled breast cancer studies",
+        "category": "study_design",
+        "top_k_ids": [
+          "NCT03116048",
+          "NCT06151249",
+          "NCT01596530",
+          "NCT00041223",
+          "NCT06306274",
+          "NCT00252811",
+          "NCT00211133",
+          "NCT01747720",
+          "NCT00022204",
+          "NCT03205033"
+        ],
+        "top_k_scores": [
+          0.300565661147123,
+          0.2977497129330504,
+          0.25773847381391385,
+          0.25694029281270514,
+          0.25638612742294514,
+          0.2539334827624987,
+          0.24445639131554,
+          0.2444380430100157,
+          0.23909151389218836,
+          0.23574474248092572
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "DOUBLE",
+          "placebo"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "DOUBLE": 1,
+          "placebo": 1
+        }
+      },
+      {
+        "query": "breast cancer trials in Texas recruiting now",
+        "category": "location",
+        "top_k_ids": [
+          "NCT04569955",
+          "NCT02529280",
+          "NCT05769491",
+          "NCT02839863",
+          "NCT03053193",
+          "NCT02712645",
+          "NCT00477100",
+          "NCT02893761",
+          "NCT01066507",
+          "NCT01992250"
+        ],
+        "top_k_scores": [
+          0.15800385494322883,
+          0.1364158195276418,
+          0.13073502214285163,
+          0.12803377452128592,
+          0.12335833978927212,
+          0.12222979733293769,
+          0.12081480089038463,
+          0.12017776497109572,
+          0.11732914588083679,
+          0.11566016639767882
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Texas",
+          "RECRUITING"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "Texas": 2,
+          "RECRUITING": 1
+        }
+      },
+      {
+        "query": "breast cancer clinical trials available in Europe",
+        "category": "location",
+        "top_k_ids": [
+          "NCT05760183",
+          "NCT05769491",
+          "NCT04569955",
+          "NCT07040891",
+          "NCT05351424",
+          "NCT02529280",
+          "NCT02808598",
+          "NCT05655494",
+          "NCT06361056",
+          "NCT01715155"
+        ],
+        "top_k_scores": [
+          0.2951680434468814,
+          0.2931086003807857,
+          0.2694424182645719,
+          0.2507885344437353,
+          0.22399597133159116,
+          0.2234938818608625,
+          0.22091146502075468,
+          0.21016725806584494,
+          0.19256326659535428,
+          0.15961150651285663
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Germany",
+          "France",
+          "United Kingdom",
+          "Italy",
+          "Spain"
+        ],
+        "hit": false,
+        "reciprocal_rank": 0.0,
+        "precision": 0.0,
+        "keyword_hits": {}
+      },
+      {
+        "query": "breast cancer trials sponsored by Pfizer",
+        "category": "sponsor",
+        "top_k_ids": [
+          "NCT00649090",
+          "NCT00078000",
+          "NCT00279448",
+          "NCT00174343",
+          "NCT00784888",
+          "NCT01061359",
+          "NCT06735742",
+          "NCT04982848",
+          "NCT00067314",
+          "NCT00322517"
+        ],
+        "top_k_scores": [
+          0.2948274475125072,
+          0.278264956684673,
+          0.26923235579536936,
+          0.2613781780566365,
+          0.24875423474991773,
+          0.23270199826888532,
+          0.23141545081889575,
+          0.2295706057669893,
+          0.22809539447463165,
+          0.22750619239632447
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Pfizer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "Pfizer": 1
+        }
+      },
+      {
+        "query": "industry-sponsored breast cancer trials",
+        "category": "sponsor",
+        "top_k_ids": [
+          "NCT04569955",
+          "NCT05769491",
+          "NCT05760183",
+          "NCT05833802",
+          "NCT05931042",
+          "NCT00880503",
+          "NCT02171078",
+          "NCT07040891",
+          "NCT03554434",
+          "NCT00342056"
+        ],
+        "top_k_scores": [
+          0.2051471418032772,
+          0.2010982085674136,
+          0.16594330570306418,
+          0.14931571355288337,
+          0.1472216898554027,
+          0.1434850822339086,
+          0.1390598697996885,
+          0.1362323081416818,
+          0.1361617901393993,
+          0.13608902383628896
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "INDUSTRY"
+        ],
+        "hit": true,
+        "reciprocal_rank": 0.5,
+        "precision": 0.3,
+        "keyword_hits": {
+          "INDUSTRY": 2
+        }
+      },
+      {
+        "query": "breast cancer trials measuring overall survival as primary endpoint",
+        "category": "outcomes",
+        "top_k_ids": [
+          "NCT02030678",
+          "NCT01038466",
+          "NCT00437853",
+          "NCT04655066",
+          "NCT01978756",
+          "NCT05149014",
+          "NCT03638648",
+          "NCT04249440",
+          "NCT04079049",
+          "NCT02054338"
+        ],
+        "top_k_scores": [
+          0.17191871808799858,
+          0.1661300968016998,
+          0.15182938080073194,
+          0.14675230946100098,
+          0.14220160168965,
+          0.138468887370747,
+          0.1383439890246018,
+          0.1372846678120452,
+          0.13676162494933394,
+          0.13607886988169832
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "overall survival",
+          "OS"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "overall survival": 1,
+          "OS": 1
+        }
+      },
+      {
+        "query": "breast cancer trials with pathological complete response endpoint",
+        "category": "outcomes",
+        "top_k_ids": [
+          "NCT05931042",
+          "NCT05435352",
+          "NCT03876951",
+          "NCT05755581",
+          "NCT07426653",
+          "NCT07523789",
+          "NCT05169853",
+          "NCT03986268",
+          "NCT02879513",
+          "NCT07500129"
+        ],
+        "top_k_scores": [
+          0.2473687350567217,
+          0.20181951109583018,
+          0.19793836080060734,
+          0.19616178476683713,
+          0.1906242136282456,
+          0.19000299915623797,
+          0.1876420356076866,
+          0.18673954735468637,
+          0.18624809126861877,
+          0.18197377218768232
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pathological complete response",
+          "pCR"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pathological complete response": 1,
+          "pCR": 1
+        }
+      },
+      {
+        "query": "what treatments are available for early stage breast cancer",
+        "category": "semantic",
+        "top_k_ids": [
+          "NCT02921152",
+          "NCT06387173",
+          "NCT00558168",
+          "NCT01166581",
+          "NCT00145197",
+          "NCT00949013",
+          "NCT02266602",
+          "NCT01239251",
+          "NCT02380209",
+          "NCT00614172"
+        ],
+        "top_k_scores": [
+          0.2535861356418951,
+          0.24940071070162811,
+          0.2445837201613223,
+          0.24014065059269435,
+          0.23098476816999844,
+          0.22888606762528002,
+          0.2166304998637223,
+          0.20972298575836873,
+          0.20777157718509598,
+          0.20772542319003898
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "early",
+          "stage",
+          "adjuvant"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "early": 1,
+          "stage": 1,
+          "adjuvant": 5
+        }
+      },
+      {
+        "query": "new experimental drugs being tested for metastatic breast cancer",
+        "category": "semantic",
+        "top_k_ids": [
+          "NCT00265655",
+          "NCT03456973",
+          "NCT01855503",
+          "NCT00153218",
+          "NCT01282931",
+          "NCT05760183",
+          "NCT01451580",
+          "NCT06459791",
+          "NCT01935739",
+          "NCT02979678"
+        ],
+        "top_k_scores": [
+          0.147695947919978,
+          0.14611144412117805,
+          0.1421470134960206,
+          0.1401349745009532,
+          0.1365954201478295,
+          0.13640648194693292,
+          0.13509770999413484,
+          0.13405626253149827,
+          0.13384044973269735,
+          0.13333785291257222
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "metastatic",
+          "experimental",
+          "DRUG"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "metastatic": 1,
+          "experimental": 2,
+          "DRUG": 1
+        }
+      }
+    ]
+  },
+  "generation": {
+    "metrics": {},
+    "details": []
+  }
+}
