@@ -15,6 +15,8 @@ async def lifespan(app: FastAPI):
         csv_path=settings.csv_path,
         client=client,
         model=settings.claude_model,
+        retriever_type=settings.retriever_type,
+        voyage_api_key=settings.voyage_api_key,
     )
     app.state.pipeline = pipeline
     app.state.client = client

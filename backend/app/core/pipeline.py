@@ -4,7 +4,7 @@ import anthropic
 
 from .data import build_documents, load_clinical_trials
 from .generation import generate_answer, generate_answer_stream
-from .retriever import TFIDFRetriever
+from .retriever import TFIDFRetriever, VoyageRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +17,22 @@ class ClinicalTrialRAG:
         csv_path: str,
         client: anthropic.AsyncAnthropic,
         model: str = "claude-sonnet-4-20250514",
+        retriever_type: str = "voyage",
+        voyage_api_key: str = "",
     ):
         logger.info("Loading clinical trial data from %s", csv_path)
         self.df = load_clinical_trials(csv_path)
         self.documents = build_documents(self.df)
-        self.retriever = TFIDFRetriever(self.documents)
+
+        if retriever_type == "voyage" and voyage_api_key:
+            logger.info("Using Voyage AI dense retriever")
+            self.retriever = VoyageRetriever(self.documents, api_key=voyage_api_key)
+        else:
+            if retriever_type == "voyage" and not voyage_api_key:
+                logger.warning("Voyage API key not set — falling back to TF-IDF retriever")
+            logger.info("Using TF-IDF sparse retriever")
+            self.retriever = TFIDFRetriever(self.documents)
+
         self.client = client
         self.model = model
         logger.info("RAG pipeline ready (%d trials indexed)", len(self.documents))

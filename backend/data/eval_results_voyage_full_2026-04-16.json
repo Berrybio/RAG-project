@@ -1,0 +1,810 @@
+{
+  "timestamp": "2026-04-16T11:08:47.593503",
+  "config": {
+    "csv_path": "/Users/jiayi/Desktop/berrybio_ai_project/RAG Project/app_rag_approach/backend/scripts/../data/breast_cancer_trials_full_2026-04-14.csv",
+    "num_trials": 16248,
+    "top_k": 5,
+    "model": "claude-sonnet-4-20250514",
+    "retriever_type": "voyage",
+    "num_eval_queries": 20
+  },
+  "retrieval": {
+    "hit_rate": 0.95,
+    "mrr": 0.925,
+    "avg_precision": 0.89,
+    "per_category": {
+      "condition_specific": {
+        "count": 4,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "drug_specific": {
+        "count": 4,
+        "hit_rate": 0.75,
+        "mrr": 0.75,
+        "avg_precision": 0.75
+      },
+      "eligibility": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "location": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 0.75,
+        "avg_precision": 0.8
+      },
+      "outcomes": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "semantic": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 1.0
+      },
+      "sponsor": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 0.7
+      },
+      "study_design": {
+        "count": 2,
+        "hit_rate": 1.0,
+        "mrr": 1.0,
+        "avg_precision": 0.9
+      }
+    },
+    "details": [
+      {
+        "query": "CDK4/6 inhibitor trials for hormone receptor positive breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT07180056",
+          "NCT05795335",
+          "NCT07130643",
+          "NCT06810492",
+          "NCT06344793"
+        ],
+        "top_k_scores": [
+          0.6829036474227905,
+          0.6711052656173706,
+          0.6400980949401855,
+          0.6387038826942444,
+          0.636896014213562
+        ],
+        "expected_nct_ids": [
+          "NCT04567420"
+        ],
+        "expected_keywords": [],
+        "hit": false,
+        "reciprocal_rank": 0.0,
+        "precision": 0.0,
+        "keyword_hits": {}
+      },
+      {
+        "query": "pembrolizumab immunotherapy trials for triple negative breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT05539365",
+          "NCT06976944",
+          "NCT06407310",
+          "NCT06246968",
+          "NCT02954874"
+        ],
+        "top_k_scores": [
+          0.6871349811553955,
+          0.6755222082138062,
+          0.6660231351852417,
+          0.6647341251373291,
+          0.6633601188659668
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pembrolizumab",
+          "triple negative",
+          "TNBC"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pembrolizumab": 1,
+          "triple negative": 1,
+          "TNBC": 1
+        }
+      },
+      {
+        "query": "trastuzumab deruxtecan T-DXd for HER2 positive breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT04784715",
+          "NCT06750484",
+          "NCT05113251",
+          "NCT04482309",
+          "NCT04539938"
+        ],
+        "top_k_scores": [
+          0.6646175384521484,
+          0.6640742421150208,
+          0.655783474445343,
+          0.6534380912780762,
+          0.6425661444664001
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "trastuzumab",
+          "HER2",
+          "T-DXd",
+          "Enhertu"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "trastuzumab": 1,
+          "HER2": 1,
+          "T-DXd": 1,
+          "Enhertu": 3
+        }
+      },
+      {
+        "query": "PARP inhibitor olaparib trials for BRCA mutated breast cancer",
+        "category": "drug_specific",
+        "top_k_ids": [
+          "NCT03286842",
+          "NCT03641755",
+          "NCT03344965",
+          "NCT02000622",
+          "NCT02032823"
+        ],
+        "top_k_scores": [
+          0.6830655336380005,
+          0.6690869331359863,
+          0.6625985503196716,
+          0.6585714817047119,
+          0.6570102572441101
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "PARP",
+          "olaparib",
+          "BRCA"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "PARP": 1,
+          "olaparib": 1,
+          "BRCA": 1
+        }
+      },
+      {
+        "query": "clinical trials for inflammatory breast cancer",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT05041101",
+          "NCT00340158",
+          "NCT00477100",
+          "NCT02876302",
+          "NCT03742986"
+        ],
+        "top_k_scores": [
+          0.5906609296798706,
+          0.5801881551742554,
+          0.5783199667930603,
+          0.5759403109550476,
+          0.5756176710128784
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "inflammatory",
+          "breast cancer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "inflammatory": 1,
+          "breast cancer": 1
+        }
+      },
+      {
+        "query": "trials for breast cancer that has spread to the brain",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT02260531",
+          "NCT00496379",
+          "NCT05769010",
+          "NCT00071383",
+          "NCT00795678"
+        ],
+        "top_k_scores": [
+          0.5968822240829468,
+          0.5917428731918335,
+          0.5902621746063232,
+          0.5902174115180969,
+          0.5860183238983154
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "brain metast",
+          "CNS"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "brain metast": 1,
+          "CNS": 1
+        }
+      },
+      {
+        "query": "neoadjuvant treatment trials before breast cancer surgery",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT03219476",
+          "NCT02934828",
+          "NCT00080626",
+          "NCT00136539",
+          "NCT06313073"
+        ],
+        "top_k_scores": [
+          0.6195385456085205,
+          0.6194796562194824,
+          0.609399676322937,
+          0.6063363552093506,
+          0.6038718223571777
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "neoadjuvant"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "neoadjuvant": 1
+        }
+      },
+      {
+        "query": "male breast cancer clinical trials",
+        "category": "condition_specific",
+        "top_k_ids": [
+          "NCT05501704",
+          "NCT01101425",
+          "NCT03240510",
+          "NCT00773669",
+          "NCT06133647"
+        ],
+        "top_k_scores": [
+          0.6224468946456909,
+          0.6060957312583923,
+          0.6042342185974121,
+          0.5991200804710388,
+          0.5970278382301331
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "male",
+          "breast cancer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "male": 1,
+          "breast cancer": 1
+        }
+      },
+      {
+        "query": "breast cancer trials that accept patients over 70 years old",
+        "category": "eligibility",
+        "top_k_ids": [
+          "NCT03858322",
+          "NCT00025493",
+          "NCT02823262",
+          "NCT03944434",
+          "NCT00263705"
+        ],
+        "top_k_scores": [
+          0.6636345386505127,
+          0.6332747340202332,
+          0.6138676404953003,
+          0.6079732179641724,
+          0.6046952605247498
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "age",
+          "elderly",
+          "older"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "age": 1,
+          "elderly": 1,
+          "older": 1
+        }
+      },
+      {
+        "query": "breast cancer trials for pregnant women",
+        "category": "eligibility",
+        "top_k_ids": [
+          "NCT00833963",
+          "NCT00196833",
+          "NCT00510367",
+          "NCT07191496",
+          "NCT04603820"
+        ],
+        "top_k_scores": [
+          0.6265085935592651,
+          0.6213787794113159,
+          0.6196354627609253,
+          0.6086053252220154,
+          0.6030257940292358
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pregnant",
+          "pregnancy"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pregnant": 1,
+          "pregnancy": 1
+        }
+      },
+      {
+        "query": "randomized phase 3 breast cancer trials",
+        "category": "study_design",
+        "top_k_ids": [
+          "NCT06079983",
+          "NCT06760637",
+          "NCT06725082",
+          "NCT07024173",
+          "NCT00127205"
+        ],
+        "top_k_scores": [
+          0.5657942295074463,
+          0.5574682950973511,
+          0.5487252473831177,
+          0.542170524597168,
+          0.5366039276123047
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "PHASE3",
+          "RANDOMIZED"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "PHASE3": 1,
+          "RANDOMIZED": 1
+        }
+      },
+      {
+        "query": "double blind placebo controlled breast cancer studies",
+        "category": "study_design",
+        "top_k_ids": [
+          "NCT02783794",
+          "NCT00425776",
+          "NCT03603197",
+          "NCT00333775",
+          "NCT04880369"
+        ],
+        "top_k_scores": [
+          0.5875457525253296,
+          0.5696520209312439,
+          0.5678404569625854,
+          0.5635666847229004,
+          0.5628061294555664
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "DOUBLE",
+          "placebo"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.8,
+        "keyword_hits": {
+          "DOUBLE": 1,
+          "placebo": 1
+        }
+      },
+      {
+        "query": "breast cancer trials in Texas recruiting now",
+        "category": "location",
+        "top_k_ids": [
+          "NCT03093350",
+          "NCT00817531",
+          "NCT00206414",
+          "NCT05501704",
+          "NCT00322894"
+        ],
+        "top_k_scores": [
+          0.5146183967590332,
+          0.5096482038497925,
+          0.5066564083099365,
+          0.5046399235725403,
+          0.5022478103637695
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Texas",
+          "RECRUITING"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.8,
+        "keyword_hits": {
+          "Texas": 1,
+          "RECRUITING": 4
+        }
+      },
+      {
+        "query": "breast cancer clinical trials available in Europe",
+        "category": "location",
+        "top_k_ids": [
+          "NCT01840293",
+          "NCT02913456",
+          "NCT02102165",
+          "NCT03417115",
+          "NCT00081796"
+        ],
+        "top_k_scores": [
+          0.5622668862342834,
+          0.5613282322883606,
+          0.5484387278556824,
+          0.5473416447639465,
+          0.5470755100250244
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Germany",
+          "France",
+          "United Kingdom",
+          "Italy",
+          "Spain"
+        ],
+        "hit": true,
+        "reciprocal_rank": 0.5,
+        "precision": 0.8,
+        "keyword_hits": {
+          "Germany": 3,
+          "France": 5,
+          "United Kingdom": 3,
+          "Italy": 2,
+          "Spain": 3
+        }
+      },
+      {
+        "query": "breast cancer trials sponsored by Pfizer",
+        "category": "sponsor",
+        "top_k_ids": [
+          "NCT06760637",
+          "NCT00471159",
+          "NCT00078000",
+          "NCT00373256",
+          "NCT05262400"
+        ],
+        "top_k_scores": [
+          0.5855503082275391,
+          0.5793530344963074,
+          0.5651369690895081,
+          0.5603901147842407,
+          0.5589905977249146
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "Pfizer"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "Pfizer": 1
+        }
+      },
+      {
+        "query": "industry-sponsored breast cancer trials",
+        "category": "sponsor",
+        "top_k_ids": [
+          "NCT00081796",
+          "NCT03925233",
+          "NCT03155997",
+          "NCT02171078",
+          "NCT05501704"
+        ],
+        "top_k_scores": [
+          0.4866979718208313,
+          0.47746992111206055,
+          0.47472792863845825,
+          0.4740428924560547,
+          0.4722565710544586
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "INDUSTRY"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 0.4,
+        "keyword_hits": {
+          "INDUSTRY": 1
+        }
+      },
+      {
+        "query": "breast cancer trials measuring overall survival as primary endpoint",
+        "category": "outcomes",
+        "top_k_ids": [
+          "NCT03676257",
+          "NCT03423849",
+          "NCT02125630",
+          "NCT04059484",
+          "NCT03275311"
+        ],
+        "top_k_scores": [
+          0.5971538424491882,
+          0.555522084236145,
+          0.5468286275863647,
+          0.5449258089065552,
+          0.5408895611763
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "overall survival",
+          "OS"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "overall survival": 1,
+          "OS": 1
+        }
+      },
+      {
+        "query": "breast cancer trials with pathological complete response endpoint",
+        "category": "outcomes",
+        "top_k_ids": [
+          "NCT02879513",
+          "NCT01203267",
+          "NCT03349177",
+          "NCT05931042",
+          "NCT05103293"
+        ],
+        "top_k_scores": [
+          0.5991784334182739,
+          0.5798733234405518,
+          0.5796709060668945,
+          0.5749744176864624,
+          0.5689432621002197
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "pathological complete response",
+          "pCR"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "pathological complete response": 1,
+          "pCR": 1
+        }
+      },
+      {
+        "query": "what treatments are available for early stage breast cancer",
+        "category": "semantic",
+        "top_k_ids": [
+          "NCT00006030",
+          "NCT00004237",
+          "NCT03407768",
+          "NCT00002582",
+          "NCT02764541"
+        ],
+        "top_k_scores": [
+          0.5453556776046753,
+          0.5444550514221191,
+          0.5390685796737671,
+          0.5370720624923706,
+          0.5304257869720459
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "early",
+          "stage",
+          "adjuvant"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "early": 2,
+          "stage": 1,
+          "adjuvant": 1
+        }
+      },
+      {
+        "query": "new experimental drugs being tested for metastatic breast cancer",
+        "category": "semantic",
+        "top_k_ids": [
+          "NCT01273896",
+          "NCT06409390",
+          "NCT00313248",
+          "NCT01196455",
+          "NCT03424005"
+        ],
+        "top_k_scores": [
+          0.5833882093429565,
+          0.5797753930091858,
+          0.5758271217346191,
+          0.573562502861023,
+          0.5676915645599365
+        ],
+        "expected_nct_ids": [],
+        "expected_keywords": [
+          "metastatic",
+          "experimental",
+          "DRUG"
+        ],
+        "hit": true,
+        "reciprocal_rank": 1.0,
+        "precision": 1.0,
+        "keyword_hits": {
+          "metastatic": 1,
+          "experimental": 1,
+          "DRUG": 1
+        }
+      }
+    ]
+  },
+  "generation": {
+    "metrics": {
+      "count": 10,
+      "avg_faithfulness": 1.7,
+      "avg_relevance": 4.6,
+      "avg_completeness": 1.9,
+      "avg_overall": 2.7333333333333334,
+      "avg_latency": 18.91071472167969
+    },
+    "details": [
+      {
+        "query": "CDK4/6 inhibitor trials for hormone receptor positive breast cancer",
+        "category": "drug_specific",
+        "answer": "Based on the retrieved clinical trial data, I can provide you with information about several CDK4/6 inhibitor trials for hormone receptor-positive breast cancer currently being conducted in China:\n\n## Overview of Available Trials\n\n### **1. Adjuvant Setting Trial**\n**NCT07180056** - \"Adjuvant CDK4/6 Inhibitor Use in HR+/HER2- Breast Cancer\"\n- **Status**: Recruiting\n- **Study Type**: Observational real-world study\n- **Population**: HR+/HER2- breast cancer patients (estimated enrollment: 229)\n- **I",
+        "faithfulness": 1,
+        "faithfulness_reason": "The answer contains significant hallucinated information. Only one trial (NCT07180056) was provided in the context, but the answer describes multiple trials (NCT05795335, NCT07130643, NCT06810492, NCT06344793) with detailed information not present in the context. This is a severe case of hallucination.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user query about CDK4/6 inhibitor trials for hormone receptor positive breast cancer, providing comprehensive information about trial types and details.",
+        "completeness": 2,
+        "completeness_reason": "While the answer appears comprehensive, it's based almost entirely on fabricated information not present in the context. The one trial that was actually provided (NCT07180056) is accurately covered, but the majority of the response is unsupported by the retrieved context.",
+        "latency_seconds": 18.010515928268433
+      },
+      {
+        "query": "pembrolizumab immunotherapy trials for triple negative breast cancer",
+        "category": "drug_specific",
+        "answer": "Based on the retrieved clinical trial data, here are the pembrolizumab immunotherapy trials for triple-negative breast cancer (TNBC):\n\n## Active/Recruiting Trials\n\n### **NCT06976944 - PRELUDE Study** (Phase 2, Recruiting)\n**Focus**: Recurrent TNBC patients who previously received perioperative immunotherapy\n- **Interventions**: Pembrolizumab + Paclitaxel \u00b1 Bevacizumab\n- **Design**: Randomized comparison of pembrolizumab + paclitaxel + bevacizumab vs. pembrolizumab + paclitaxel alone\n- **Primary ",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer contains significant hallucinated information. Only one trial (NCT05539365) is actually present in the retrieved context, but the answer discusses multiple other trials (NCT06976944, NCT06407310, NCT06246968, NCT02954874) with detailed information that is not found in the provided context.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user's query about pembrolizumab immunotherapy trials for triple-negative breast cancer and provides comprehensive information about trial phases, designs, and outcomes.",
+        "completeness": 1,
+        "completeness_reason": "While the answer appears comprehensive, it fails to accurately represent the retrieved context. The context only contains information about one withdrawn trial (NCT05539365), but the answer presents multiple active trials without any basis in the provided context.",
+        "latency_seconds": 16.846278190612793
+      },
+      {
+        "query": "trastuzumab deruxtecan T-DXd for HER2 positive breast cancer",
+        "category": "drug_specific",
+        "answer": "Based on the clinical trial data provided, here's a comprehensive overview of trastuzumab deruxtecan (T-DXd) trials for HER2-positive breast cancer:\n\n## Available T-DXd Trials for HER2-Positive Breast Cancer\n\n### **NCT04784715 - DESTINY-Breast09 (Phase 3, Metastatic Setting)**\n- **Status**: Active, not recruiting (1,157 participants enrolled)\n- **Population**: First-line HER2-positive metastatic breast cancer\n- **Design**: Comparing T-DXd \u00b1 pertuzumab vs. standard care (taxane + trastuzumab + pe",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer includes two trials (DESTINY-Breast11 and HER2CLIMB-04) that are not present in the provided context, which only contains information about DESTINY-Breast09. This constitutes significant hallucination of trial information.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses trastuzumab deruxtecan (T-DXd) for HER2-positive breast cancer, providing comprehensive trial information relevant to the query.",
+        "completeness": 3,
+        "completeness_reason": "While the answer provides detailed information about the one trial in the context (DESTINY-Breast09), it includes fabricated information about other trials. For the actual available context, it covers the main points reasonably well but the inclusion of non-existent trials significantly impacts the overall accuracy.",
+        "latency_seconds": 18.440057277679443
+      },
+      {
+        "query": "PARP inhibitor olaparib trials for BRCA mutated breast cancer",
+        "category": "drug_specific",
+        "answer": "Based on the provided clinical trial data, here's a comprehensive overview of PARP inhibitor olaparib trials for BRCA-mutated breast cancer:\n\n## Overview of Olaparib Trials for BRCA-Mutated Breast Cancer\n\nThe data reveals **5 significant clinical trials** investigating olaparib (Lynparza) in BRCA-mutated breast cancer across different treatment settings:\n\n### **Metastatic Disease Trials**\n\n**1. NCT02000622 (OlympiAD) - Phase III**\n- **Status**: COMPLETED\n- **Design**: Randomized controlled trial",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer claims to describe 5 trials but only one trial (NCT03286842) is provided in the context. All other trial details (NCT02000622, NCT03344965, NCT03641755, NCT02032823) appear to be hallucinated, including specific enrollment numbers, outcomes, and trial designs not present in the provided context.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user query about PARP inhibitor olaparib trials for BRCA-mutated breast cancer, providing comprehensive information about trial designs, populations, outcomes, and dosing relevant to the question.",
+        "completeness": 1,
+        "completeness_reason": "While the answer appears comprehensive, it is based almost entirely on fabricated information about trials not in the provided context. Only one actual trial from the context is correctly described, making the response fundamentally incomplete in terms of authentic trial coverage.",
+        "latency_seconds": 22.072253942489624
+      },
+      {
+        "query": "clinical trials for inflammatory breast cancer",
+        "category": "condition_specific",
+        "answer": "Based on the provided clinical trial data, here are the key clinical trials for inflammatory breast cancer (IBC):\n\n## Active/Recruiting Trials\n\n### NCT00477100 - IBC Registry and Biospecimen Collection\n- **Status**: RECRUITING\n- **Type**: Observational study\n- **Purpose**: Creates a research tissue registry collecting biospecimens and medical data\n- **Location**: 10 sites across the US, led by M.D. Anderson Cancer Center\n- **PI**: Vicente Valero, MD\n- **Enrollment**: Up to 1,200 patients\n- **Key",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer contains significant information not present in the provided context. Only NCT05041101 is actually described in the context, but the answer discusses multiple other trials (NCT00477100, NCT02876302, NCT03742986, NCT00340158) with detailed information that appears to be hallucinated.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user query about clinical trials for inflammatory breast cancer, providing comprehensive information about different types of trials and treatment approaches.",
+        "completeness": 2,
+        "completeness_reason": "While the answer appears comprehensive, it only accurately covers one trial from the provided context (NCT05041101) out of the many trials it claims to describe. The completeness is misleading since most information is not grounded in the given context.",
+        "latency_seconds": 20.178529024124146
+      },
+      {
+        "query": "trials for breast cancer that has spread to the brain",
+        "category": "condition_specific",
+        "answer": "Based on the provided clinical trial data, I can identify several trials specifically designed for breast cancer patients with brain metastases:\n\n## Active/Recruiting Trials\n\n### NCT05769010 - SHR-A1811 Study\n**Status**: Currently RECRUITING  \n**Phase**: Phase 2  \n**Location**: Henan Cancer Hospital, China  \n**Contact**: Min Yan (ym200678@126.com), HuiMin Lv (lvhuimin999@163.com)\n\nThis is a prospective, open-label study evaluating SHR-A1811 (an antibody-drug conjugate) in HER2-expressing advance",
+        "faithfulness": 1,
+        "faithfulness_reason": "The answer contains significant hallucinated information. It describes multiple trials (NCT05769010, NCT00496379, NCT00795678, NCT00071383) that are not present in the provided context. Only NCT02260531 is actually in the context. The answer fabricates detailed information about these non-existent trials including contact information, locations, and study designs.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user's query about trials for breast cancer that has spread to the brain, providing specific trial information and relevant details about treatments for brain metastases.",
+        "completeness": 2,
+        "completeness_reason": "While the answer appears comprehensive by describing multiple trials, it actually only uses one trial from the provided context (NCT02260531) and fabricates the rest. It does provide good detail about the actual trial including enrollment, interventions, and outcomes, but the majority of the content is not grounded in the provided context.",
+        "latency_seconds": 16.768757104873657
+      },
+      {
+        "query": "neoadjuvant treatment trials before breast cancer surgery",
+        "category": "condition_specific",
+        "answer": "Based on the retrieved clinical trial data, I can provide information about several neoadjuvant treatment trials for breast cancer:\n\n## Available Neoadjuvant Treatment Trials\n\n### 1. **NCT03219476 - Neoadjuvant Endocrine Therapy** (Completed)\n- **Phase**: 2\n- **Status**: Completed  \n- **Location**: Medical College of Wisconsin, Milwaukee\n- **Target Population**: Hormone receptor-positive, HER2-negative, node-negative breast cancer patients\n- **Intervention**: Physician's choice of:\n  - Anastrozo",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer contains significant hallucinated information. Only one trial (NCT03219476) is actually present in the retrieved context, but the answer presents 4-5 additional trials (NCT02934828, NCT00080626, NCT00136539, NCT06313073) with detailed information that is not found anywhere in the provided context. This is a major fabrication of clinical trial data.",
+        "relevance": 5,
+        "relevance_reason": "The answer directly addresses the user's query about neoadjuvant treatment trials before breast cancer surgery. The structure and content are highly relevant to what was asked, focusing specifically on pre-surgical treatments for breast cancer.",
+        "completeness": 1,
+        "completeness_reason": "While the answer appears comprehensive, it is actually very incomplete because it only accurately covers one trial from the retrieved context while fabricating the rest. The retrieved context contains only one trial, which the answer does cover accurately, but the majority of the response is hallucinated content not present in the provided context.",
+        "latency_seconds": 20.26167392730713
+      },
+      {
+        "query": "male breast cancer clinical trials",
+        "category": "condition_specific",
+        "answer": "Based on the clinical trial data provided, here's a comprehensive overview of male breast cancer clinical trials:\n\n## Active Treatment Trial\n\n**NCT05501704 - ETHAN Study** \nThis is the primary **active interventional trial** specifically designed for male breast cancer patients:\n\n- **Phase**: Phase II randomized trial\n- **Status**: Currently recruiting\n- **Enrollment**: 60 men (estimated)\n- **Principal Investigator**: Jose Pablo Leone, MD (Dana-Farber Cancer Institute)\n\n### Study Design\nThe ETHA",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer contains significant hallucinated information not present in the context, including multiple trials (NCT01101425, NCT03240510, NCT00773669, NCT06133647) with detailed descriptions, locations, and investigators that are not mentioned in the provided context. Only NCT05501704 is actually described in the retrieved context.",
+        "relevance": 4,
+        "relevance_reason": "The answer directly addresses the user's query about male breast cancer clinical trials and provides comprehensive information about trials in this area, though much of it is not supported by the provided context.",
+        "completeness": 3,
+        "completeness_reason": "While the answer provides detailed coverage of the one actual trial from the context (NCT05501704) and appears comprehensive in scope, the completeness score is reduced because most of the additional trials mentioned are hallucinated and not based on the provided context.",
+        "latency_seconds": 21.485388040542603
+      },
+      {
+        "query": "breast cancer trials that accept patients over 70 years old",
+        "category": "eligibility",
+        "answer": "Based on the clinical trial data provided, here are **5 breast cancer trials that accept patients over 70 years old**:\n\n## Active/Recent Trials\n\n### 1. **NCT03858322 - 'ADVANCE' (A Pilot Trial)**\n- **Status**: Active, not recruiting\n- **Phase**: Phase 1\n- **Minimum Age**: 70 years\n- **Focus**: Adjuvant chemotherapy for early-stage breast cancer in elderly patients\n- **Interventions**: \n  - For triple negative: Paclitaxel + Carboplatin\n  - For hormone receptor-positive: Paclitaxel + Cyclophospham",
+        "faithfulness": 2,
+        "faithfulness_reason": "The answer claims to present '5 breast cancer trials' but only one trial (NCT03858322 - ADVANCE) is actually provided in the context. The other 4 trials (FACILE, Breast Cancer Treatment Decision Aid, S0029 Docetaxel, Adjuvant Capecitabine) appear to be fabricated with detailed information not found in the context.",
+        "relevance": 3,
+        "relevance_reason": "The answer does address the question about breast cancer trials accepting patients over 70, and correctly identifies the one relevant trial from the context. However, the fabricated trials create misleading information about available options.",
+        "completeness": 2,
+        "completeness_reason": "While the answer attempts comprehensive coverage by listing multiple trials, it only accurately covers the single trial provided in the context. The fabricated trials create an illusion of completeness but actually represent significant inaccuracies rather than thorough coverage of available information.",
+        "latency_seconds": 16.985283851623535
+      },
+      {
+        "query": "breast cancer trials for pregnant women",
+        "category": "eligibility",
+        "answer": "Based on the clinical trial data provided, here are the key breast cancer trials for pregnant women:\n\n## Active/Recruiting Trials\n\n### 1. Breast Cancer in Pregnancy Register Study (NCT00196833)\n- **Status**: RECRUITING\n- **Type**: Observational registry study\n- **Location**: Germany (German Breast Group)\n- **Target Enrollment**: 1,100 participants\n- **Sponsor**: GBG Forschungs GmbH\n- **PI**: Prof. Dr. Sibylle Loibl\n\n**Key Features**:\n- Prospective and retrospective data collection\n- Tracks mater",
+        "faithfulness": 1,
+        "faithfulness_reason": "The answer contains extensive hallucinated information. Only the MotHER study (NCT00833963) is actually present in the provided context. All other trials mentioned (NCT00196833, NCT04603820, NCT00510367, NCT07191496) are completely fabricated and not found in the retrieved context.",
+        "relevance": 4,
+        "relevance_reason": "The answer directly addresses breast cancer trials for pregnant women and provides relevant information about study types, outcomes, and considerations. However, it's based on fabricated data rather than the provided context.",
+        "completeness": 2,
+        "completeness_reason": "While the answer appears comprehensive in structure and covers various aspects of breast cancer trials in pregnancy, it only accurately represents one trial from the context (MotHER study) and fabricates the rest, making it fundamentally incomplete in terms of actual available data.",
+        "latency_seconds": 18.058409929275513
+      }
+    ]
+  }
+}

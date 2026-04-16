@@ -3,6 +3,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     anthropic_api_key: str
+    voyage_api_key: str = ""
+    retriever_type: str = "voyage"  # "voyage" or "tfidf"
     csv_path: str = "data/breast_cancer_trials_full_2026-04-14.csv"
     claude_model: str = "claude-sonnet-4-20250514"
     log_level: str = "info"
