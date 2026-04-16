@@ -38,7 +38,7 @@ from datetime import datetime
 import anthropic
 
 from app.core.data import load_clinical_trials, build_documents
-from app.core.retriever import TFIDFRetriever
+from app.core.retriever import TFIDFRetriever, VoyageRetriever
 from app.core.generation import generate_answer, format_context
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
@@ -310,6 +310,11 @@ You are an expert evaluator of clinical trial question-answering systems.
 You will be given a user query, retrieved clinical trial context, and a
 generated answer. Score the answer on three dimensions.
 
+IMPORTANT: The context contains multiple trials enclosed in <trial> XML tags.
+Each <trial> block is a separate trial that WAS retrieved from the database.
+Count the actual <trial> tags to determine how many trials were provided.
+The answer may legitimately reference ALL trials present in the context.
+
 Return your evaluation as JSON with exactly these keys:
 {
   "faithfulness": <1-5>,
@@ -322,12 +327,12 @@ Return your evaluation as JSON with exactly these keys:
 
 Scoring rubric:
 
-Faithfulness (is the answer grounded in the provided context?):
-  5 = Every claim is directly supported by the trial data
-  4 = Almost all claims supported, minor inferences
-  3 = Mostly supported but some unsupported claims
-  2 = Significant claims not in context
-  1 = Answer contains hallucinated information
+Faithfulness (is every claim in the answer supported by the provided context?):
+  5 = Every claim maps directly to a field in the <trial> data
+  4 = Almost all claims supported, minor reasonable inferences from trial fields
+  3 = Mostly supported but includes some details not found in the context
+  2 = Multiple claims that cannot be traced to the provided trial data
+  1 = Fabricates trial details, drugs, or results not in any <trial> block
 
 Relevance (does the answer address the question?):
   5 = Directly and thoroughly answers the question
@@ -337,10 +342,10 @@ Relevance (does the answer address the question?):
   1 = Does not answer the question
 
 Completeness (does it cover the key trials and information?):
-  5 = Comprehensive, covers all relevant trials and details
+  5 = Covers all provided trials with key details (phase, status, intervention, outcomes)
   4 = Good coverage with minor omissions
-  3 = Covers main points but misses important details
-  2 = Significant gaps in coverage
+  3 = Covers main points but misses important details from the trial data
+  2 = Significant gaps — skips trials or omits critical fields
   1 = Very incomplete
 
 Return ONLY the JSON object, no other text."""
@@ -371,11 +376,16 @@ async def evaluate_generation_single(
     """Use LLM-as-judge to evaluate a single generated answer."""
     context = format_context(retrieved_docs)
 
+    n_trials = len(retrieved_docs)
+    nct_ids = [doc["metadata"].get("nctId", "?") for doc in retrieved_docs]
     judge_msg = (
         f"User Query: {query}\n\n"
-        f"=== RETRIEVED CONTEXT ===\n{context[:5000]}\n=== END ===\n\n"
+        f"Number of trials in context: {n_trials}\n"
+        f"NCT IDs in context: {', '.join(nct_ids)}\n\n"
+        f"=== RETRIEVED CONTEXT ===\n{context}\n=== END ===\n\n"
         f"=== GENERATED ANSWER ===\n{answer}\n=== END ===\n\n"
-        f"Evaluate the generated answer. Return your scores as JSON."
+        f"Evaluate the generated answer against the {n_trials} trials above. "
+        f"Return your scores as JSON."
     )
 
     response = await client.messages.create(
@@ -422,6 +432,8 @@ async def run_evaluation(
     top_k: int = 5,
     retrieval_only: bool = False,
     model: str = "claude-sonnet-4-20250514",
+    retriever_type: str = "voyage",
+    voyage_api_key: str = "",
 ) -> dict:
     """Run full evaluation and return results dict."""
     print("=" * 60)
@@ -432,7 +444,15 @@ async def run_evaluation(
     print(f"\n📄 Loading data from {csv_path}...")
     df = load_clinical_trials(csv_path)
     documents = build_documents(df)
-    retriever = TFIDFRetriever(documents)
+
+    if retriever_type == "voyage" and voyage_api_key:
+        print(f"   Using Voyage AI dense retriever ({VoyageRetriever.EMBED_MODEL})")
+        retriever = VoyageRetriever(documents, api_key=voyage_api_key)
+    else:
+        if retriever_type == "voyage" and not voyage_api_key:
+            print("   ⚠ VOYAGE_API_KEY not set — falling back to TF-IDF")
+        print("   Using TF-IDF sparse retriever")
+        retriever = TFIDFRetriever(documents)
     print(f"   Indexed {len(documents)} trials")
 
     # ---- Retrieval evaluation ----
@@ -572,6 +592,7 @@ async def run_evaluation(
             "num_trials": len(documents),
             "top_k": top_k,
             "model": model,
+            "retriever_type": retriever_type if (retriever_type == "voyage" and voyage_api_key) else "tfidf",
             "num_eval_queries": len(EVAL_QUERIES),
         },
         "retrieval": {
@@ -617,6 +638,10 @@ def main():
         "--output", default=None,
         help="Output JSON path. Defaults to backend/data/eval_results_YYYY-MM-DD.json"
     )
+    parser.add_argument(
+        "--retriever", default="voyage", choices=["voyage", "tfidf"],
+        help="Retriever type: 'voyage' (dense embeddings) or 'tfidf' (sparse). Default: voyage"
+    )
     args = parser.parse_args()
 
     # Default CSV path
@@ -637,12 +662,17 @@ def main():
                 print("✗ No CSV files found in data/")
                 return
 
+    # Voyage API key
+    voyage_api_key = os.getenv("VOYAGE_API_KEY", "")
+
     # Run evaluation
     report = asyncio.run(run_evaluation(
         csv_path=csv_path,
         top_k=args.top_k,
         retrieval_only=args.retrieval_only,
         model=args.model,
+        retriever_type=args.retriever,
+        voyage_api_key=voyage_api_key,
     ))
 
     # Save report

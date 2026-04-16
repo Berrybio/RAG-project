@@ -6,19 +6,24 @@ import anthropic
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
-You are a knowledgeable clinical trials assistant specializing in breast cancer \
-research. You help researchers and patients find relevant clinical trials and \
-understand trial details.
+You are a clinical trials assistant specializing in breast cancer research.
 
-When answering questions:
-1. Base your answers ONLY on the provided clinical trial data.
-2. Reference specific trial NCT IDs when mentioning trials.
-3. If the retrieved data doesn't contain enough information to answer, say so clearly.
-4. Provide structured, easy-to-read responses.
-5. Highlight important eligibility criteria when relevant.
-6. Mention the trial phase, status, location, sponsor, and PI when helpful.
-7. When discussing interventions, include drug aliases if available.
-8. Reference primary outcomes and study design details when relevant."""
+CRITICAL GROUNDING RULES — violation of these rules is a failure:
+- You will be given a <trials> section containing the ONLY trial data you may use.
+- NEVER mention any NCT ID that is not explicitly listed in <trials>.
+- NEVER invent, recall, or infer trial details from your training data.
+- If a field is missing from a trial, say "not specified" — do NOT guess.
+- If the provided trials are insufficient to fully answer, explicitly state: \
+"Only [N] relevant trial(s) were found in the database for this query."
+- Every fact in your answer must map to a specific field in <trials>.
+
+When answering:
+1. Summarize each relevant trial concisely: NCT ID, title, phase, status, \
+intervention, key eligibility, primary outcome, and sponsor.
+2. Highlight differences between trials when multiple are returned.
+3. If eligibility, location, or outcome data is missing for a trial, say \
+"not specified" rather than guessing.
+4. Keep responses precise and structured. Do not pad with generic information."""
 
 
 def format_context(retrieved_docs: list[dict]) -> str:
@@ -29,7 +34,7 @@ def format_context(retrieved_docs: list[dict]) -> str:
 
         # Build a structured summary from metadata
         lines = [
-            f"--- Trial {i} (Relevance: {doc['score']:.3f}) ---",
+            f"<trial id=\"{i}\">",
             f"NCT ID: {meta.get('nctId', '')}",
             f"Title: {meta.get('title', '')}",
         ]
@@ -42,7 +47,6 @@ def format_context(retrieved_docs: list[dict]) -> str:
             ("Study Type", "studyType"),
             ("Conditions", "conditions"),
             ("Keywords", "keywords"),
-            ("MeSH Terms", "meshTermsCondition"),
             ("Allocation", "allocation"),
             ("Intervention Model", "interventionModel"),
             ("Primary Purpose", "primaryPurpose"),
@@ -69,6 +73,7 @@ def format_context(retrieved_docs: list[dict]) -> str:
             ("Number of Sites", "locationCount"),
             ("Locations", "locationInfo"),
             ("Contact", "contactInfo"),
+            ("Eligibility Criteria", "eligibilityCriteria"),
             ("FDA Regulated Drug", "isFdaRegulatedDrug"),
         ]
         for label, key in field_map:
@@ -76,7 +81,7 @@ def format_context(retrieved_docs: list[dict]) -> str:
             if val and str(val) not in ("", "0", "False"):
                 lines.append(f"{label}: {val}")
 
-        lines.append(f"\nFull Details:\n{doc['text'][:3000]}")
+        lines.append("</trial>")
         context_parts.append("\n".join(lines))
 
     return "\n\n".join(context_parts)
@@ -84,11 +89,28 @@ def format_context(retrieved_docs: list[dict]) -> str:
 
 def _build_user_message(query: str, retrieved_docs: list[dict]) -> str:
     context = format_context(retrieved_docs)
+    n = len(retrieved_docs)
+    nct_ids = [doc["metadata"].get("nctId", "unknown") for doc in retrieved_docs]
+    id_list = ", ".join(nct_ids)
     return (
-        f"Based on the following clinical trial data, please answer the user's question.\n\n"
-        f"=== RETRIEVED CLINICAL TRIALS ===\n{context}\n=== END OF DATA ===\n\n"
-        f"User's Question: {query}\n\n"
-        f"Please provide a comprehensive answer based on the trial data above."
+        f"Exactly {n} trial(s) were retrieved. The ONLY NCT IDs you may reference "
+        f"are: {id_list}\n\n"
+        f"<trials>\n{context}\n</trials>\n\n"
+        f"Question: {query}\n\n"
+        f"Answer using ONLY the {n} trial(s) above. Do NOT mention any NCT ID, "
+        f"drug, or study not present in <trials>. If {n} trials are not enough "
+        f"to fully answer the question, state that explicitly."
+    )
+
+
+def _assistant_prefill(retrieved_docs: list[dict]) -> str:
+    """Anchor the assistant's response with the exact trial IDs available."""
+    n = len(retrieved_docs)
+    nct_ids = [doc["metadata"].get("nctId", "unknown") for doc in retrieved_docs]
+    id_list = ", ".join(nct_ids)
+    return (
+        f"Based on the {n} retrieved trial(s) ({id_list}), "
+        f"here is what I found:"
     )
 
 
@@ -99,13 +121,17 @@ async def generate_answer(
     model: str = "claude-sonnet-4-20250514",
 ) -> str:
     """Send the query + retrieved context to Claude and return the full answer."""
+    prefill = _assistant_prefill(retrieved_docs)
     response = await client.messages.create(
         model=model,
         max_tokens=4096,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": _build_user_message(query, retrieved_docs)}],
+        messages=[
+            {"role": "user", "content": _build_user_message(query, retrieved_docs)},
+            {"role": "assistant", "content": prefill},
+        ],
     )
-    return response.content[0].text
+    return prefill + response.content[0].text
 
 
 async def generate_answer_stream(
@@ -115,11 +141,16 @@ async def generate_answer_stream(
     model: str = "claude-sonnet-4-20250514",
 ) -> AsyncGenerator[str, None]:
     """Stream answer tokens as an async generator for SSE."""
+    prefill = _assistant_prefill(retrieved_docs)
+    yield prefill
     async with client.messages.stream(
         model=model,
         max_tokens=4096,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": _build_user_message(query, retrieved_docs)}],
+        messages=[
+            {"role": "user", "content": _build_user_message(query, retrieved_docs)},
+            {"role": "assistant", "content": prefill},
+        ],
     ) as stream:
         async for text in stream.text_stream:
             yield text
