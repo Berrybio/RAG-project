@@ -231,3 +231,175 @@ def _add_list_section(doc: Document, title: str, items: list | None):
     doc.add_heading(title, level=1)
     for item in items:
         doc.add_paragraph(str(item), style="List Bullet")
+
+
+# ---------------------------------------------------------------------------
+# PDF generation
+# ---------------------------------------------------------------------------
+def build_protocol_pdf(protocol: dict) -> BytesIO:
+    """Build a PDF document from a protocol JSON dict. Returns a BytesIO buffer."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, ListFlowable, ListItem,
+    )
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter,
+        leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+        topMargin=0.75 * inch, bottomMargin=0.75 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TitleCentered", parent=styles["Title"], alignment=TA_CENTER, fontSize=18, spaceAfter=12,
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleCentered", parent=styles["Normal"], alignment=TA_CENTER, fontSize=12, spaceAfter=24,
+    )
+    h1 = ParagraphStyle(
+        "H1", parent=styles["Heading1"], fontSize=14, spaceBefore=12, spaceAfter=6, textColor=colors.HexColor("#1f4e79"),
+    )
+    body = ParagraphStyle(
+        "Body", parent=styles["Normal"], fontSize=11, leading=14, spaceAfter=8,
+    )
+
+    story = []
+
+    # Title page
+    story.append(Paragraph(_xml_escape(protocol.get("title", "Clinical Trial Protocol")), title_style))
+    if protocol.get("official_title"):
+        story.append(Paragraph(_xml_escape(protocol["official_title"]), subtitle_style))
+
+    meta_fields = [
+        ("Protocol ID", "protocol_id"),
+        ("Sponsor", "sponsor"),
+        ("Phase", "phase"),
+        ("Status", "status"),
+        ("Conditions", "conditions"),
+    ]
+    for label, key in meta_fields:
+        if protocol.get(key):
+            story.append(Paragraph(f"<b>{label}:</b> {_xml_escape(str(protocol[key]))}", body))
+
+    story.append(PageBreak())
+
+    # Summary & Description
+    _pdf_add_section(story, h1, body, "Summary", protocol.get("summary"))
+    _pdf_add_section(story, h1, body, "Description", protocol.get("description"))
+
+    # Objectives
+    _pdf_add_list(story, h1, body, "Primary Objectives", protocol.get("primary_objectives"))
+    _pdf_add_list(story, h1, body, "Secondary Objectives", protocol.get("secondary_objectives"))
+    _pdf_add_list(story, h1, body, "Exploratory Objectives", protocol.get("exploratory_objectives"))
+
+    # Study Design
+    _pdf_add_section(story, h1, body, "Study Design", protocol.get("study_design"))
+    _pdf_add_section(story, h1, body, "Study Schema", protocol.get("study_schema"))
+
+    # Intervention
+    _pdf_add_section(story, h1, body, "Intervention", protocol.get("intervention_name"))
+    _pdf_add_section(story, h1, body, "Intervention Description", protocol.get("intervention_description"))
+    _pdf_add_section(story, h1, body, "Comparator", protocol.get("comparator"))
+    _pdf_add_section(story, h1, body, "Treatment Duration", protocol.get("treatment_duration"))
+
+    # Eligibility
+    _pdf_add_list(story, h1, body, "Inclusion Criteria", protocol.get("inclusion_criteria"))
+    _pdf_add_list(story, h1, body, "Exclusion Criteria", protocol.get("exclusion_criteria"))
+
+    # Endpoints
+    _pdf_add_list(story, h1, body, "Primary Endpoints", protocol.get("primary_endpoints"))
+    _pdf_add_list(story, h1, body, "Secondary Endpoints", protocol.get("secondary_endpoints"))
+
+    # Statistics
+    enrollment = protocol.get("estimated_enrollment")
+    if enrollment:
+        _pdf_add_section(story, h1, body, "Estimated Enrollment", str(enrollment))
+    _pdf_add_section(story, h1, body, "Sample Size Justification", protocol.get("sample_size_justification"))
+    _pdf_add_section(story, h1, body, "Statistical Analysis", protocol.get("statistical_analysis"))
+
+    # Safety
+    _pdf_add_section(story, h1, body, "Safety Monitoring", protocol.get("safety_monitoring"))
+    _pdf_add_section(story, h1, body, "Adverse Event Reporting", protocol.get("adverse_event_reporting"))
+    _pdf_add_section(story, h1, body, "Dose Modification", protocol.get("dose_modification"))
+
+    # Assessments
+    _pdf_add_section(story, h1, body, "Study Assessments", protocol.get("study_assessments"))
+
+    # Schedule table
+    schedule = protocol.get("study_schedule_table")
+    if schedule and isinstance(schedule, list):
+        story.append(Paragraph("Study Schedule", h1))
+        table_data = [["Visit", "Timepoint", "Procedures"]]
+        for row in schedule:
+            table_data.append([
+                Paragraph(_xml_escape(str(row.get("visit", ""))), body),
+                Paragraph(_xml_escape(str(row.get("timepoint", ""))), body),
+                Paragraph(_xml_escape(str(row.get("procedures", ""))), body),
+            ])
+        tbl = Table(table_data, colWidths=[1.3 * inch, 1.5 * inch, 4.0 * inch], repeatRows=1)
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4e79")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f2f2f2")]),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 12))
+
+    # Regulatory & Ethics
+    _pdf_add_section(story, h1, body, "Ethical Considerations", protocol.get("ethical_considerations"))
+    _pdf_add_section(story, h1, body, "Data Management", protocol.get("data_management"))
+    _pdf_add_section(story, h1, body, "Regulatory Considerations", protocol.get("regulatory_considerations"))
+
+    # Demographics
+    if protocol.get("sex"):
+        _pdf_add_section(story, h1, body, "Eligible Sex", protocol["sex"])
+    if protocol.get("minimum_age"):
+        _pdf_add_section(story, h1, body, "Minimum Age", protocol["minimum_age"])
+
+    # Locations
+    _pdf_add_list(story, h1, body, "Locations", protocol.get("locations"))
+
+    # Contact
+    _pdf_add_section(story, h1, body, "Contact Information", protocol.get("contact_info"))
+
+    # References
+    _pdf_add_list(story, h1, body, "References", protocol.get("references"))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def _xml_escape(text: str) -> str:
+    """Escape characters that ReportLab's Paragraph treats as XML."""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _pdf_add_section(story: list, h1, body, title: str, content: str | None):
+    if not content:
+        return
+    from reportlab.platypus import Paragraph
+    story.append(Paragraph(title, h1))
+    story.append(Paragraph(_xml_escape(str(content)), body))
+
+
+def _pdf_add_list(story: list, h1, body, title: str, items: list | None):
+    if not items:
+        return
+    from reportlab.platypus import Paragraph, ListFlowable, ListItem
+    story.append(Paragraph(title, h1))
+    list_items = [ListItem(Paragraph(_xml_escape(str(item)), body)) for item in items]
+    story.append(ListFlowable(list_items, bulletType="bullet", leftIndent=18))
