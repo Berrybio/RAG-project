@@ -1,5 +1,7 @@
+import hashlib
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -63,14 +65,26 @@ class VoyageRetriever(BaseRetriever):
     EMBED_MODEL = "voyage-3"
     BATCH_SIZE = 128  # Voyage API limit per request
     MAX_DOC_CHARS = 16000  # truncate long docs to stay within token limits
+    CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "embeddings_cache"
 
-    def __init__(self, documents: list[dict], api_key: str):
+    def __init__(self, documents: list[dict], api_key: str, use_cache: bool = True):
         import voyageai
 
         self.documents = documents
         self.client = voyageai.Client(api_key=api_key)
 
         texts = [doc["text"][:self.MAX_DOC_CHARS] for doc in documents]
+
+        cache_path = self._cache_path(texts) if use_cache else None
+        cached = self._load_cache(cache_path) if cache_path else None
+
+        if cached is not None:
+            self.embeddings = cached
+            logger.info(
+                "Loaded cached Voyage embeddings for %d documents (dim=%d) from %s",
+                len(self.documents), self.embeddings.shape[1], cache_path.name,
+            )
+            return
 
         # Embed documents in batches
         logger.info(
@@ -95,6 +109,41 @@ class VoyageRetriever(BaseRetriever):
             "Voyage AI indexed %d documents (dim=%d)",
             len(self.documents), self.embeddings.shape[1],
         )
+
+        if cache_path is not None:
+            self._save_cache(cache_path, self.embeddings)
+
+    @classmethod
+    def _cache_path(cls, texts: list[str]) -> Path:
+        """Derive a deterministic cache file path from corpus content + model."""
+        hasher = hashlib.sha256()
+        hasher.update(cls.EMBED_MODEL.encode("utf-8"))
+        hasher.update(str(len(texts)).encode("utf-8"))
+        for t in texts:
+            hasher.update(t.encode("utf-8", errors="replace"))
+            hasher.update(b"\x00")
+        digest = hasher.hexdigest()[:16]
+        return cls.CACHE_DIR / f"voyage_{cls.EMBED_MODEL}_{len(texts)}_{digest}.npz"
+
+    @staticmethod
+    def _load_cache(path: Path) -> np.ndarray | None:
+        if not path.exists():
+            return None
+        try:
+            with np.load(path) as data:
+                return data["embeddings"].astype(np.float32)
+        except Exception as e:
+            logger.warning("Failed to load embedding cache %s: %s", path.name, e)
+            return None
+
+    @staticmethod
+    def _save_cache(path: Path, embeddings: np.ndarray) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            np.savez_compressed(path, embeddings=embeddings)
+            logger.info("Saved Voyage embeddings cache to %s", path)
+        except Exception as e:
+            logger.warning("Failed to save embedding cache %s: %s", path.name, e)
 
     def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
         result = self.client.embed([query], model=self.EMBED_MODEL, input_type="query")
