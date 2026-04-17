@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse
 from ..dependencies import get_pipeline, get_client
 from ..models.schemas import ProtocolRequest, ProtocolResponse, DocxRequest, SourceDoc
 from ..core.pipeline import ClinicalTrialRAG
-from ..core.protocol import generate_protocol_json, build_protocol_docx
+from ..core.protocol import generate_protocol_json, build_protocol_docx, build_protocol_pdf
 from ..api.search import _to_source_doc
 
 import anthropic
@@ -35,5 +35,16 @@ async def create_protocol_docx(body: DocxRequest):
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/protocol/pdf")
+async def create_protocol_pdf(body: DocxRequest):
+    buffer = build_protocol_pdf(body.protocol)
+    filename = body.protocol.get("protocol_id", "protocol") + ".pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
