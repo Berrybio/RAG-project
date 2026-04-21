@@ -79,6 +79,68 @@ def _doc_matches_countries(doc: dict, countries: list[str]) -> bool:
     return any(c.lower() in haystack for c in countries)
 
 
+# ---- Treatment-setting filter (adjuvant / neoadjuvant / metastatic) ----
+#
+# Breast cancer trials fall into distinct clinical settings:
+#   - adjuvant / neoadjuvant: early-stage disease, treatment around surgery
+#   - metastatic (a.k.a. "advanced", stage IV, mBC): incurable disseminated disease
+# "Advanced" is a clinical synonym for metastatic, so a query for adjuvant trials
+# should not surface trials whose population is advanced/metastatic.
+
+_METASTATIC_RE = re.compile(r"\b(metastatic|advanced|stage\s*iv|stage\s*4|mbc)\b", re.I)
+_EARLY_RE = re.compile(r"\b(early|early-stage|non-metastatic|ebc|stage\s*i\b|stage\s*ii\b|stage\s*iii\b)", re.I)
+_ADJUVANT_RE = re.compile(r"(?<!neo)\badjuvant\b", re.I)
+_NEOADJUVANT_RE = re.compile(r"\bneoadjuvant\b", re.I)
+
+
+def _extract_setting_intent(query: str) -> str | None:
+    """Detect treatment-setting intent in the query.
+
+    Returns one of {"neoadjuvant", "adjuvant", "metastatic"} or None.
+    Neoadjuvant is checked before adjuvant because "adjuvant" is a substring match.
+    """
+    if _NEOADJUVANT_RE.search(query):
+        return "neoadjuvant"
+    if _ADJUVANT_RE.search(query) or re.search(r"\b(early|early-stage|ebc|non-metastatic)\b", query, re.I):
+        return "adjuvant"
+    if _METASTATIC_RE.search(query):
+        return "metastatic"
+    return None
+
+
+def _doc_setting_text(doc: dict) -> str:
+    """Concatenate the high-signal fields (title/conditions/keywords) for a doc."""
+    md = doc.get("metadata", {})
+    return " ".join([
+        md.get("title", ""),
+        md.get("officialTitle", ""),
+        md.get("conditions", ""),
+        md.get("keywords", ""),
+    ])
+
+
+def _doc_matches_setting(doc: dict, intent: str) -> bool:
+    """True if doc's title/conditions are consistent with the requested setting."""
+    text = _doc_setting_text(doc)
+    has_met = bool(_METASTATIC_RE.search(text))
+    has_early = bool(_EARLY_RE.search(text))
+    has_adj = bool(_ADJUVANT_RE.search(text))
+    has_neo = bool(_NEOADJUVANT_RE.search(text))
+
+    if intent == "metastatic":
+        return has_met
+    if intent == "neoadjuvant":
+        return has_neo
+    if intent == "adjuvant":
+        # Keep trials that explicitly signal adjuvant/neoadjuvant/early-stage.
+        # Exclude trials whose primary population is metastatic/advanced
+        # unless they also carry an explicit adjuvant or early-stage signal.
+        if has_adj or has_neo or has_early:
+            return True
+        return not has_met
+    return True
+
+
 class ClinicalTrialRAG:
     """End-to-end RAG pipeline for clinical trial Q&A."""
 
@@ -112,23 +174,30 @@ class ClinicalTrialRAG:
         return self._retrieve_with_country_filter(query, top_k)
 
     def _retrieve_with_country_filter(self, query: str, top_k: int) -> list[dict]:
-        """Retrieve top_k docs, hard-filtering by country if the query names one."""
+        """Retrieve top_k docs, hard-filtering by country and treatment setting when present."""
         countries = _extract_countries(query)
-        if not countries:
+        setting = _extract_setting_intent(query)
+
+        if not countries and not setting:
             return self.retriever.retrieve(query, top_k=top_k)
 
-        # Overfetch, then keep only docs whose locations include a requested country.
+        # Overfetch, then apply filters. Larger pool gives filters room to work.
         pool = self.retriever.retrieve(query, top_k=max(top_k * 10, 50))
-        filtered = [d for d in pool if _doc_matches_countries(d, countries)]
+        filtered = pool
+        if countries:
+            filtered = [d for d in filtered if _doc_matches_countries(d, countries)]
+        if setting:
+            filtered = [d for d in filtered if _doc_matches_setting(d, setting)]
+
         if not filtered:
             logger.info(
-                "Country filter %s matched 0 trials in top pool — falling back to unfiltered results",
-                countries,
+                "Filter (countries=%s setting=%s) matched 0 trials — falling back to unfiltered results",
+                countries, setting,
             )
             return pool[:top_k]
         logger.info(
-            "Country filter %s kept %d / %d retrieved trials",
-            countries, len(filtered), len(pool),
+            "Filter (countries=%s setting=%s) kept %d / %d retrieved trials",
+            countries, setting, len(filtered), len(pool),
         )
         return filtered[:top_k]
 
