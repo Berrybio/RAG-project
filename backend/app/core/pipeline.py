@@ -79,6 +79,59 @@ def _doc_matches_countries(doc: dict, countries: list[str]) -> bool:
     return any(c.lower() in haystack for c in countries)
 
 
+# ---- US state / sub-national region filter ----
+#
+# Matches queries like "trials in New York" or "Texas trials" against the
+# full per-trial location string, so multi-site trials that include the
+# requested state anywhere in their locations are kept.
+
+_US_STATES: dict[str, str] = {
+    # full name : canonical form used for substring match (title-case)
+    "alabama": "Alabama", "alaska": "Alaska", "arizona": "Arizona", "arkansas": "Arkansas",
+    "california": "California", "colorado": "Colorado", "connecticut": "Connecticut",
+    "delaware": "Delaware", "florida": "Florida", "georgia": "Georgia", "hawaii": "Hawaii",
+    "idaho": "Idaho", "illinois": "Illinois", "indiana": "Indiana", "iowa": "Iowa",
+    "kansas": "Kansas", "kentucky": "Kentucky", "louisiana": "Louisiana", "maine": "Maine",
+    "maryland": "Maryland", "massachusetts": "Massachusetts", "michigan": "Michigan",
+    "minnesota": "Minnesota", "mississippi": "Mississippi", "missouri": "Missouri",
+    "montana": "Montana", "nebraska": "Nebraska", "nevada": "Nevada",
+    "new hampshire": "New Hampshire", "new jersey": "New Jersey", "new mexico": "New Mexico",
+    "new york": "New York", "north carolina": "North Carolina", "north dakota": "North Dakota",
+    "ohio": "Ohio", "oklahoma": "Oklahoma", "oregon": "Oregon", "pennsylvania": "Pennsylvania",
+    "rhode island": "Rhode Island", "south carolina": "South Carolina",
+    "south dakota": "South Dakota", "tennessee": "Tennessee", "texas": "Texas", "utah": "Utah",
+    "vermont": "Vermont", "virginia": "Virginia", "washington": "Washington",
+    "west virginia": "West Virginia", "wisconsin": "Wisconsin", "wyoming": "Wyoming",
+    "district of columbia": "District of Columbia", "washington dc": "District of Columbia",
+    "washington, d.c.": "District of Columbia",
+}
+
+
+def _extract_us_states(query: str) -> list[str]:
+    """Return canonical US state names referenced in the query."""
+    q = query.lower()
+    found: list[str] = []
+    # Longest alias first so "new york" wins over nothing, and "west virginia" over "virginia".
+    for alias in sorted(_US_STATES, key=len, reverse=True):
+        if re.search(rf"\b{re.escape(alias)}\b", q):
+            canonical = _US_STATES[alias]
+            if canonical not in found:
+                found.append(canonical)
+            q = re.sub(rf"\b{re.escape(alias)}\b", " ", q)
+    return found
+
+
+def _doc_matches_states(doc: dict, states: list[str]) -> bool:
+    """True if any requested state appears in the doc's full location string.
+
+    Uses the untruncated `locationInfoFull` so multi-site trials with long
+    location lists still match sites past the 500-char display truncation.
+    """
+    meta = doc.get("metadata", {})
+    haystack = (meta.get("locationInfoFull") or meta.get("locationInfo") or "").lower()
+    return any(s.lower() in haystack for s in states)
+
+
 # ---- Treatment-setting filter (adjuvant / neoadjuvant / metastatic) ----
 #
 # Breast cancer trials fall into distinct clinical settings:
@@ -174,11 +227,12 @@ class ClinicalTrialRAG:
         return self._retrieve_with_country_filter(query, top_k)
 
     def _retrieve_with_country_filter(self, query: str, top_k: int) -> list[dict]:
-        """Retrieve top_k docs, hard-filtering by country and treatment setting when present."""
+        """Retrieve top_k docs, hard-filtering by country/state/setting when present."""
         countries = _extract_countries(query)
+        states = _extract_us_states(query)
         setting = _extract_setting_intent(query)
 
-        if not countries and not setting:
+        if not countries and not states and not setting:
             return self.retriever.retrieve(query, top_k=top_k)
 
         # Overfetch, then apply filters. Larger pool gives filters room to work.
@@ -186,18 +240,20 @@ class ClinicalTrialRAG:
         filtered = pool
         if countries:
             filtered = [d for d in filtered if _doc_matches_countries(d, countries)]
+        if states:
+            filtered = [d for d in filtered if _doc_matches_states(d, states)]
         if setting:
             filtered = [d for d in filtered if _doc_matches_setting(d, setting)]
 
         if not filtered:
             logger.info(
-                "Filter (countries=%s setting=%s) matched 0 trials — falling back to unfiltered results",
-                countries, setting,
+                "Filter (countries=%s states=%s setting=%s) matched 0 trials — falling back to unfiltered results",
+                countries, states, setting,
             )
             return pool[:top_k]
         logger.info(
-            "Filter (countries=%s setting=%s) kept %d / %d retrieved trials",
-            countries, setting, len(filtered), len(pool),
+            "Filter (countries=%s states=%s setting=%s) kept %d / %d retrieved trials",
+            countries, states, setting, len(filtered), len(pool),
         )
         return filtered[:top_k]
 

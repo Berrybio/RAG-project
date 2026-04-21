@@ -123,6 +123,9 @@ def build_documents(df: pd.DataFrame) -> list[dict]:
                 "piAffiliation": _str(row.get("piAffiliation", "")),
                 # Contacts & Locations
                 "locationInfo": _str(row.get("locationInfo", ""))[:500],
+                # Full location string (untruncated) used for state/city filtering.
+                # Not surfaced in API responses; see pipeline filters.
+                "locationInfoFull": _str(row.get("locationInfo", "")),
                 "locationCountries": _str(row.get("locationCountries", "")),
                 "locationCount": row.get("locationCount", 0),
                 "contactInfo": _str(row.get("contactInfo", ""))[:300],
