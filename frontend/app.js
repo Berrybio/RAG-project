@@ -75,6 +75,7 @@ document.getElementById("search-btn").addEventListener("click", async () => {
     const evtSource = new EventSource(
       `${API_BASE}/search/stream?query=${encodeURIComponent(query)}&top_k=${topK}`
     );
+    let finished = false;
 
     evtSource.addEventListener("sources", (e) => {
       const sources = JSON.parse(e.data);
@@ -91,16 +92,22 @@ document.getElementById("search-btn").addEventListener("click", async () => {
     });
 
     evtSource.addEventListener("done", () => {
+      finished = true;
       evtSource.close();
       btn.disabled = false;
       btn.textContent = "Search";
     });
 
-    evtSource.addEventListener("error", (e) => {
+    evtSource.addEventListener("error", () => {
+      // EventSource fires "error" on normal connection close too. Only surface
+      // an error message if the stream never reached "done".
+      if (finished) return;
       evtSource.close();
       btn.disabled = false;
       btn.textContent = "Search";
-      answerContent.textContent = "An error occurred while searching. Please try again.";
+      if (!answerContent.textContent) {
+        answerContent.textContent = "An error occurred while searching. Please try again.";
+      }
     });
   } catch (err) {
     btn.disabled = false;
