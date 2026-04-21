@@ -1,4 +1,4 @@
-const API_BASE = "/api";
+const API_BASE = "http://localhost:8000/api";
 
 // --- Tab switching ---
 document.querySelectorAll(".tab").forEach((tab) => {
@@ -31,7 +31,11 @@ function renderSourceCard(source) {
   return `
     <div class="source-card">
       <div class="title">${escapeHtml(source.title)}</div>
-      <div class="nct-id">${escapeHtml(source.nct_id)} <span class="score">${(source.score * 100).toFixed(1)}%</span></div>
+      <div class="nct-id">
+        <a href="https://clinicaltrials.gov/study/${encodeURIComponent(source.nct_id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.nct_id)}</a>
+        <span class="score">${(source.score * 100).toFixed(1)}%</span>
+        <a class="source-link" href="https://clinicaltrials.gov/study/${encodeURIComponent(source.nct_id)}" target="_blank" rel="noopener noreferrer">View on ClinicalTrials.gov &#8599;</a>
+      </div>
       <div class="meta">
         <span>Phase: ${escapeHtml(source.phases)}</span>
         <span>Status: ${escapeHtml(source.status)}</span>
