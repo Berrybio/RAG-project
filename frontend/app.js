@@ -232,8 +232,8 @@ document.getElementById("protocol-query").addEventListener("keydown", (e) => {
 });
 
 // --- Protocol preview rendering ---
-function renderProtocolPreview(p) {
-  const preview = document.getElementById("protocol-preview");
+function renderProtocolPreview(p, targetId = "protocol-preview") {
+  const preview = document.getElementById(targetId);
   let html = "";
 
   html += `<h2>${escapeHtml(p.title)}</h2>`;
@@ -299,3 +299,263 @@ function renderList(title, items) {
   html += "</ul>";
   return html;
 }
+
+// ===================== PLANNER (multi-turn chat) =====================
+
+const plannerState = {
+  messages: [],            // [{role:'user'|'assistant', content:string}]
+  lastSummary: "",         // last summarization output, used as protocol query
+  currentProtocol: null,
+};
+
+const plannerEls = () => ({
+  messagesBox: document.getElementById("planner-messages"),
+  input: document.getElementById("planner-input"),
+  sendBtn: document.getElementById("planner-send-btn"),
+  summarizeBtn: document.getElementById("planner-summarize-btn"),
+  resetBtn: document.getElementById("planner-reset-btn"),
+  topk: document.getElementById("planner-topk"),
+  topkVal: document.getElementById("planner-topk-val"),
+  summaryBox: document.getElementById("planner-summary-box"),
+  summaryContent: document.getElementById("planner-summary-content"),
+  genProtocolBtn: document.getElementById("planner-generate-protocol-btn"),
+  skipProtocolBtn: document.getElementById("planner-skip-protocol-btn"),
+  protocolLoading: document.getElementById("planner-protocol-loading"),
+  protocolResult: document.getElementById("planner-protocol-result"),
+  protocolPreview: document.getElementById("planner-protocol-preview"),
+  downloadBtn: document.getElementById("planner-download-docx-btn"),
+});
+
+function addChatMessage(role, content) {
+  const el = plannerEls().messagesBox;
+  const div = document.createElement("div");
+  div.className = `chat-message ${role}`;
+  div.textContent = content;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  return div;
+}
+
+function attachSourcesToMessage(messageDiv, sources) {
+  if (!sources || sources.length === 0) return;
+  const details = document.createElement("details");
+  details.className = "message-sources";
+  const summary = document.createElement("summary");
+  summary.textContent = `Sources (${sources.length})`;
+  details.appendChild(summary);
+  const wrap = document.createElement("div");
+  wrap.innerHTML = sources.map(renderSourceCard).join("");
+  details.appendChild(wrap);
+  messageDiv.appendChild(details);
+}
+
+function revealPlannerActions() {
+  plannerEls().summarizeBtn.classList.remove("hidden");
+}
+
+function resetPlanner() {
+  plannerState.messages = [];
+  plannerState.lastSummary = "";
+  plannerState.currentProtocol = null;
+  const e = plannerEls();
+  e.messagesBox.innerHTML = "";
+  e.summarizeBtn.classList.add("hidden");
+  e.summaryBox.classList.add("hidden");
+  e.protocolLoading.classList.add("hidden");
+  e.protocolResult.classList.add("hidden");
+  e.input.value = "";
+}
+
+async function plannerSend() {
+  const e = plannerEls();
+  const query = e.input.value.trim();
+  if (!query) return;
+
+  // Append user message to state and UI
+  plannerState.messages.push({ role: "user", content: query });
+  addChatMessage("user", query);
+  e.input.value = "";
+  e.sendBtn.disabled = true;
+  e.sendBtn.textContent = "Thinking...";
+
+  // Create assistant bubble to stream into
+  const assistantDiv = addChatMessage("assistant", "");
+  const contentNode = document.createTextNode("");
+  assistantDiv.appendChild(contentNode);
+  let assistantText = "";
+  let finished = false;
+  let streamSources = [];
+
+  try {
+    const resp = await fetch(`${API_BASE}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: plannerState.messages,
+        top_k: parseInt(e.topk.value),
+      }),
+    });
+    if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
+
+    // Parse SSE manually from streamed fetch body.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = rawEvent.split("\n");
+        let evt = "message";
+        let data = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) evt = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+
+        if (evt === "sources") {
+          try { streamSources = JSON.parse(data); } catch { streamSources = []; }
+        } else if (evt === "token") {
+          try {
+            assistantText += JSON.parse(data);
+            contentNode.nodeValue = assistantText;
+            e.messagesBox.scrollTop = e.messagesBox.scrollHeight;
+          } catch {}
+        } else if (evt === "done") {
+          finished = true;
+        } else if (evt === "error") {
+          let msg = "stream error";
+          try { msg = JSON.parse(data).message || msg; } catch {}
+          throw new Error(msg);
+        }
+      }
+    }
+
+    if (!finished && !assistantText) {
+      assistantText = "No response received.";
+      contentNode.nodeValue = assistantText;
+    }
+
+    // Persist assistant turn
+    plannerState.messages.push({ role: "assistant", content: assistantText });
+    attachSourcesToMessage(assistantDiv, streamSources);
+    revealPlannerActions();
+  } catch (err) {
+    assistantText = assistantText || `Error: ${err.message}`;
+    contentNode.nodeValue = assistantText;
+    plannerState.messages.push({ role: "assistant", content: assistantText });
+  } finally {
+    e.sendBtn.disabled = false;
+    e.sendBtn.textContent = "Send";
+  }
+}
+
+async function plannerSummarize() {
+  const e = plannerEls();
+  if (plannerState.messages.length === 0) return;
+
+  e.summarizeBtn.disabled = true;
+  e.summarizeBtn.textContent = "Summarizing...";
+  e.summaryBox.classList.remove("hidden");
+  e.summaryContent.textContent = "Generating summary...";
+
+  try {
+    const resp = await fetch(`${API_BASE}/chat/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: plannerState.messages }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    plannerState.lastSummary = data.summary;
+    e.summaryContent.textContent = data.summary;
+  } catch (err) {
+    e.summaryContent.textContent = `Failed to summarize: ${err.message}`;
+  } finally {
+    e.summarizeBtn.disabled = false;
+    e.summarizeBtn.textContent = "Summarize & plan report";
+  }
+}
+
+async function plannerGenerateProtocol() {
+  const e = plannerEls();
+  if (!plannerState.lastSummary) return;
+
+  e.protocolLoading.classList.remove("hidden");
+  e.protocolResult.classList.add("hidden");
+  e.genProtocolBtn.disabled = true;
+
+  try {
+    const resp = await fetch(`${API_BASE}/protocol/json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: plannerState.lastSummary,
+        top_k: parseInt(e.topk.value),
+      }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    plannerState.currentProtocol = data.protocol;
+    renderProtocolPreview(data.protocol, "planner-protocol-preview");
+    e.protocolResult.classList.remove("hidden");
+  } catch (err) {
+    alert(`Failed to generate protocol: ${err.message}`);
+  } finally {
+    e.protocolLoading.classList.add("hidden");
+    e.genProtocolBtn.disabled = false;
+  }
+}
+
+async function plannerDownloadProtocol() {
+  const e = plannerEls();
+  if (!plannerState.currentProtocol) return;
+  e.downloadBtn.disabled = true;
+  e.downloadBtn.textContent = "Downloading...";
+  try {
+    const resp = await fetch(`${API_BASE}/protocol/docx`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ protocol: plannerState.currentProtocol }),
+    });
+    if (!resp.ok) throw new Error("Download failed");
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (plannerState.currentProtocol.protocol_id || "protocol") + ".docx";
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Failed to download: ${err.message}`);
+  } finally {
+    e.downloadBtn.disabled = false;
+    e.downloadBtn.textContent = "Download as Word Document";
+  }
+}
+
+// Wire up planner event listeners
+(function initPlanner() {
+  const e = plannerEls();
+  if (!e.sendBtn) return;  // tab not present
+  e.sendBtn.addEventListener("click", plannerSend);
+  e.summarizeBtn.addEventListener("click", plannerSummarize);
+  e.resetBtn.addEventListener("click", resetPlanner);
+  e.genProtocolBtn.addEventListener("click", plannerGenerateProtocol);
+  e.skipProtocolBtn.addEventListener("click", () => e.summaryBox.classList.add("hidden"));
+  e.downloadBtn.addEventListener("click", plannerDownloadProtocol);
+  e.topk.addEventListener("input", (evt) => { e.topkVal.textContent = evt.target.value; });
+  e.input.addEventListener("keydown", (evt) => {
+    if (evt.key === "Enter" && !evt.shiftKey) {
+      evt.preventDefault();
+      plannerSend();
+    }
+  });
+})();

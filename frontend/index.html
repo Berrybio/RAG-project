@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=3">
+    <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
     <header>
@@ -12,6 +12,7 @@
         <p class="subtitle">Breast Cancer Phase II Trial Search & Protocol Generator</p>
         <nav>
             <button class="tab active" data-tab="search">Trial Search</button>
+            <button class="tab" data-tab="planner">Trial Planner</button>
             <button class="tab" data-tab="protocol">Protocol Generator</button>
         </nav>
     </header>
@@ -48,6 +49,51 @@
             <div id="search-sources" class="sources-box hidden">
                 <h3>Source Trials <span id="source-count"></span></h3>
                 <div id="sources-list"></div>
+            </div>
+        </section>
+
+        <!-- Planner Tab -->
+        <section id="planner-tab" class="tab-content">
+            <p class="planner-intro">
+                Iteratively plan a trial: ask questions about existing studies, get grounded answers,
+                then summarize the conversation into a planning brief and optionally generate a full protocol.
+            </p>
+
+            <div id="planner-messages" class="chat-messages"></div>
+
+            <div class="input-group">
+                <textarea id="planner-input" placeholder="e.g. 'Show me Phase 2 CDK4/6 trials for HR+/HER2- metastatic breast cancer', then follow up with design questions." rows="2"></textarea>
+                <div class="controls">
+                    <label>
+                        Top K:
+                        <input type="range" id="planner-topk" min="1" max="20" value="5">
+                        <span id="planner-topk-val">5</span>
+                    </label>
+                    <button id="planner-send-btn" class="primary-btn">Send</button>
+                    <button id="planner-summarize-btn" class="secondary-btn hidden">Summarize &amp; plan report</button>
+                    <button id="planner-reset-btn" class="secondary-btn">New conversation</button>
+                </div>
+            </div>
+
+            <div id="planner-summary-box" class="answer-box hidden">
+                <h3>Conversation summary</h3>
+                <div id="planner-summary-content" class="markdown-content"></div>
+                <div class="protocol-actions" style="margin-top:12px">
+                    <button id="planner-generate-protocol-btn" class="primary-btn">Yes, generate detailed protocol</button>
+                    <button id="planner-skip-protocol-btn" class="secondary-btn">Not now</button>
+                </div>
+            </div>
+
+            <div id="planner-protocol-loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Generating protocol from the conversation summary...</p>
+            </div>
+
+            <div id="planner-protocol-result" class="hidden">
+                <div class="protocol-actions">
+                    <button id="planner-download-docx-btn" class="primary-btn">Download as Word Document</button>
+                </div>
+                <div id="planner-protocol-preview"></div>
             </div>
         </section>
 
@@ -94,6 +140,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov</p>
     </footer>
 
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
 </body>
 </html>

@@ -132,6 +132,61 @@ def _doc_matches_states(doc: dict, states: list[str]) -> bool:
     return any(s.lower() in haystack for s in states)
 
 
+# ---- Structured filters: studyType and recruitment status ----
+#
+# The dense retriever ranks by semantic similarity, so a query like
+# "observational trials currently recruiting" — which has weak clinical
+# content — often returns mostly irrelevant top-k. Extract these
+# attributes from the query and hard-filter against metadata.
+
+def _extract_study_type(query: str) -> str | None:
+    """Return canonical studyType if the query names one, else None."""
+    q = query.lower()
+    if re.search(r"\bobservational\b", q):
+        return "OBSERVATIONAL"
+    if re.search(r"\binterventional\b", q):
+        return "INTERVENTIONAL"
+    if re.search(r"\bexpanded[\s-]access\b", q):
+        return "EXPANDED_ACCESS"
+    return None
+
+
+# Map natural-language phrases to canonical oStatus values from ClinicalTrials.gov.
+# Order matters: longer/more-specific phrases are matched first.
+_STATUS_PATTERNS: list[tuple[str, str]] = [
+    (r"\bnot\s+yet\s+recruiting\b", "NOT_YET_RECRUITING"),
+    (r"\bactive\s*,?\s*not\s+recruiting\b", "ACTIVE_NOT_RECRUITING"),
+    (r"\benrolling\s+by\s+invitation\b", "ENROLLING_BY_INVITATION"),
+    (r"\b(currently\s+|actively\s+)?recruiting\b", "RECRUITING"),
+    (r"\benrolling\b", "RECRUITING"),  # colloquial synonym
+    (r"\bcompleted\b", "COMPLETED"),
+    (r"\bterminated\b", "TERMINATED"),
+    (r"\bwithdrawn\b", "WITHDRAWN"),
+    (r"\bsuspended\b", "SUSPENDED"),
+]
+
+
+def _extract_statuses(query: str) -> list[str]:
+    """Return canonical oStatus values implied by the query."""
+    q = query.lower()
+    found: list[str] = []
+    for pattern, canonical in _STATUS_PATTERNS:
+        if re.search(pattern, q):
+            if canonical not in found:
+                found.append(canonical)
+            q = re.sub(pattern, " ", q)
+    return found
+
+
+def _doc_matches_study_type(doc: dict, study_type: str) -> bool:
+    return (doc.get("metadata", {}).get("studyType") or "").upper() == study_type
+
+
+def _doc_matches_statuses(doc: dict, statuses: list[str]) -> bool:
+    value = (doc.get("metadata", {}).get("status") or "").upper()
+    return value in statuses
+
+
 # ---- Treatment-setting filter (adjuvant / neoadjuvant / metastatic) ----
 #
 # Breast cancer trials fall into distinct clinical settings:
@@ -227,16 +282,21 @@ class ClinicalTrialRAG:
         return self._retrieve_with_country_filter(query, top_k)
 
     def _retrieve_with_country_filter(self, query: str, top_k: int) -> list[dict]:
-        """Retrieve top_k docs, hard-filtering by country/state/setting when present."""
+        """Retrieve top_k docs, hard-filtering by the structured attributes named in the query."""
         countries = _extract_countries(query)
         states = _extract_us_states(query)
         setting = _extract_setting_intent(query)
+        study_type = _extract_study_type(query)
+        statuses = _extract_statuses(query)
 
-        if not countries and not states and not setting:
+        if not any([countries, states, setting, study_type, statuses]):
             return self.retriever.retrieve(query, top_k=top_k)
 
-        # Overfetch, then apply filters. Larger pool gives filters room to work.
-        pool = self.retriever.retrieve(query, top_k=max(top_k * 10, 50))
+        # Overfetch more aggressively when filters are strict so top_k can be filled.
+        # Filters on sparse attributes (e.g. OBSERVATIONAL + RECRUITING) can reject
+        # the vast majority of a small pool.
+        pool_size = max(top_k * 20, 200) if (study_type or statuses) else max(top_k * 10, 50)
+        pool = self.retriever.retrieve(query, top_k=pool_size)
         filtered = pool
         if countries:
             filtered = [d for d in filtered if _doc_matches_countries(d, countries)]
@@ -244,17 +304,19 @@ class ClinicalTrialRAG:
             filtered = [d for d in filtered if _doc_matches_states(d, states)]
         if setting:
             filtered = [d for d in filtered if _doc_matches_setting(d, setting)]
+        if study_type:
+            filtered = [d for d in filtered if _doc_matches_study_type(d, study_type)]
+        if statuses:
+            filtered = [d for d in filtered if _doc_matches_statuses(d, statuses)]
 
-        if not filtered:
-            logger.info(
-                "Filter (countries=%s states=%s setting=%s) matched 0 trials — falling back to unfiltered results",
-                countries, states, setting,
-            )
-            return pool[:top_k]
-        logger.info(
-            "Filter (countries=%s states=%s setting=%s) kept %d / %d retrieved trials",
-            countries, states, setting, len(filtered), len(pool),
+        filter_summary = (
+            f"countries={countries} states={states} setting={setting} "
+            f"studyType={study_type} statuses={statuses}"
         )
+        if not filtered:
+            logger.info("Filter (%s) matched 0 trials — falling back to unfiltered results", filter_summary)
+            return pool[:top_k]
+        logger.info("Filter (%s) kept %d / %d retrieved trials", filter_summary, len(filtered), len(pool))
         return filtered[:top_k]
 
     async def ask(self, query: str, top_k: int = 5) -> tuple[str, list[dict]]:
