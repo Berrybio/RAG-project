@@ -22,8 +22,8 @@ these keys:
 {
   "title": "Short descriptive trial title",
   "official_title": "Full formal title including phase and design",
-  "protocol_id": "A unique protocol identifier, e.g. BRC-2026-II-001",
-  "sponsor": "Sponsoring organization name",
+  "protocol_id": "",
+  "sponsor": "",
   "phase": "Phase II",
   "status": "PLANNED",
   "conditions": "Specific breast cancer subtype(s)",
@@ -61,15 +61,32 @@ these keys:
   "regulatory_considerations": "IND/CTA requirements, regulatory authority notifications, GCP compliance",
   "sex": "ALL or FEMALE",
   "minimum_age": "18 Years",
-  "locations": ["Site 1 – City, State, Country", "..."],
-  "contact_info": "PI name, institution, and email",
+  "locations": [],
+  "contact_info": "",
   "references": ["Key reference 1 (Author et al., Journal, Year)", "..."]
 }
 
 Base the protocol on patterns you see in the reference trials but make it a
 coherent NEW study. Be specific, realistic, and scientifically rigorous.
 Include specific drug names, dosing regimens, and measurable endpoints.
-Follow ICH-GCP E6(R2) and FDA/EMA guidance for Phase II oncology trials."""
+Follow ICH-GCP E6(R2) and FDA/EMA guidance for Phase II oncology trials.
+
+IMPORTANT — administrative fields the user will fill in themselves:
+- "protocol_id": return an empty string "". Do NOT invent a protocol ID.
+- "sponsor": return an empty string "". Do NOT invent a sponsor.
+- "locations": return an empty list []. Do NOT invent sites, cities, or countries.
+- "contact_info": return an empty string "". Do NOT invent a PI or institution.
+All other scientific/design fields should be fully drafted.
+
+STUDY CENTER CONVENTION:
+- Phase I and Phase II trials are typically SINGLE-CENTER (one academic/clinical
+  site). Default to single-center for these unless the user explicitly asks for
+  multi-center.
+- Phase III trials and real-world evidence (RWE) studies are typically
+  MULTI-CENTER.
+Reflect this in "study_design" and "study_schema" (e.g., "Single-center,
+randomized, open-label Phase II trial..."). The "locations" array still stays
+empty — the user will supply the site."""
 
 
 async def generate_protocol_json(
@@ -89,14 +106,21 @@ async def generate_protocol_json(
         f"Draft a new Phase II breast cancer trial protocol as JSON."
     )
 
-    response = await client.messages.create(
+    # Use streaming for long generations (max_tokens=8192). Non-streaming
+    # requests with high max_tokens can exceed the Anthropic API gateway
+    # timeout and fail with APIConnectionError. Streaming keeps the
+    # connection warm token-by-token; we accumulate the full response.
+    chunks: list[str] = []
+    async with client.messages.stream(
         model=model,
         max_tokens=8192,
         system=PROTOCOL_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
-    )
+    ) as stream:
+        async for text in stream.text_stream:
+            chunks.append(text)
 
-    raw = response.content[0].text.strip()
+    raw = "".join(chunks).strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0]
