@@ -6,6 +6,21 @@ import anthropic
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import (
+    ListFlowable,
+    ListItem,
+    PageBreak,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from .generation import format_context
 
@@ -319,3 +334,216 @@ def _add_list_section(doc: Document, title: str, items: list | None):
     doc.add_heading(title, level=1)
     for item in items:
         doc.add_paragraph(str(item), style="List Bullet")
+
+
+# ---------------------------------------------------------------------------
+# PDF builder (reportlab / platypus)
+# ---------------------------------------------------------------------------
+
+def _pdf_styles():
+    """Paragraph styles for the protocol PDF."""
+    base = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle(
+            "ProtocolTitle", parent=base["Title"], fontSize=20, leading=24,
+            alignment=TA_CENTER, spaceAfter=6,
+        ),
+        "subtitle": ParagraphStyle(
+            "ProtocolSubtitle", parent=base["Italic"], fontSize=12, leading=15,
+            alignment=TA_CENTER, spaceAfter=18,
+        ),
+        "meta": ParagraphStyle(
+            "ProtocolMeta", parent=base["Normal"], fontSize=11, leading=15,
+            spaceAfter=4,
+        ),
+        "h1": ParagraphStyle(
+            "ProtocolH1", parent=base["Heading1"], fontSize=14, leading=18,
+            spaceBefore=14, spaceAfter=6, textColor=colors.HexColor("#1a73e8"),
+        ),
+        "body": ParagraphStyle(
+            "ProtocolBody", parent=base["BodyText"], fontSize=10.5, leading=14,
+            spaceAfter=6,
+        ),
+        "bullet": ParagraphStyle(
+            "ProtocolBullet", parent=base["BodyText"], fontSize=10.5, leading=14,
+            leftIndent=12,
+        ),
+        "placeholder": ParagraphStyle(
+            "ProtocolPlaceholder", parent=base["Italic"], fontSize=10.5, leading=14,
+            textColor=colors.HexColor("#666666"), spaceAfter=4,
+        ),
+    }
+
+
+def _pdf_escape(text) -> str:
+    """Escape text for reportlab's Paragraph mini-markup (&, <, >)."""
+    if text is None:
+        return ""
+    s = str(text)
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _pdf_section(flow, styles, title: str, content: str | None):
+    if not content:
+        return
+    flow.append(Paragraph(title, styles["h1"]))
+    flow.append(Paragraph(_pdf_escape(content), styles["body"]))
+
+
+def _pdf_list_section(flow, styles, title: str, items: list | None):
+    if not items:
+        return
+    flow.append(Paragraph(title, styles["h1"]))
+    flow.append(ListFlowable(
+        [ListItem(Paragraph(_pdf_escape(i), styles["bullet"])) for i in items],
+        bulletType="bullet", leftIndent=18, bulletFontSize=10,
+    ))
+    flow.append(Spacer(1, 6))
+
+
+def build_protocol_pdf(protocol: dict) -> BytesIO:
+    """Build a PDF document from a protocol JSON dict. Returns a BytesIO buffer.
+
+    Mirrors build_protocol_docx section-for-section, including the visible
+    placeholder behaviour for Protocol ID, Sponsor, Locations, and
+    Contact Information when the clinician hasn't filled them in yet.
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=LETTER,
+        leftMargin=0.9 * inch, rightMargin=0.9 * inch,
+        topMargin=0.8 * inch, bottomMargin=0.8 * inch,
+        title=protocol.get("title", "Clinical Trial Protocol"),
+    )
+    styles = _pdf_styles()
+    flow = []
+
+    # Title page
+    flow.append(Paragraph(_pdf_escape(protocol.get("title", "Clinical Trial Protocol")), styles["title"]))
+    if protocol.get("official_title"):
+        flow.append(Paragraph(_pdf_escape(protocol["official_title"]), styles["subtitle"]))
+
+    placeholder = "_" * 40
+    meta_fields = [
+        ("Protocol ID", "protocol_id", True),
+        ("Sponsor", "sponsor", True),
+        ("Phase", "phase", False),
+        ("Status", "status", False),
+        ("Conditions", "conditions", False),
+    ]
+    for label, key, always in meta_fields:
+        value = protocol.get(key)
+        if value:
+            flow.append(Paragraph(f"<b>{_pdf_escape(label)}:</b> {_pdf_escape(value)}", styles["meta"]))
+        elif always:
+            flow.append(Paragraph(f"<b>{_pdf_escape(label)}:</b> {placeholder}", styles["meta"]))
+
+    flow.append(PageBreak())
+
+    # Summary & Description
+    _pdf_section(flow, styles, "Summary", protocol.get("summary"))
+    _pdf_section(flow, styles, "Description", protocol.get("description"))
+
+    # Objectives
+    _pdf_list_section(flow, styles, "Primary Objectives", protocol.get("primary_objectives"))
+    _pdf_list_section(flow, styles, "Secondary Objectives", protocol.get("secondary_objectives"))
+    _pdf_list_section(flow, styles, "Exploratory Objectives", protocol.get("exploratory_objectives"))
+
+    # Study Design
+    _pdf_section(flow, styles, "Study Design", protocol.get("study_design"))
+    _pdf_section(flow, styles, "Study Schema", protocol.get("study_schema"))
+
+    # Intervention
+    _pdf_section(flow, styles, "Intervention", protocol.get("intervention_name"))
+    _pdf_section(flow, styles, "Intervention Description", protocol.get("intervention_description"))
+    _pdf_section(flow, styles, "Comparator", protocol.get("comparator"))
+    _pdf_section(flow, styles, "Treatment Duration", protocol.get("treatment_duration"))
+
+    # Eligibility
+    _pdf_list_section(flow, styles, "Inclusion Criteria", protocol.get("inclusion_criteria"))
+    _pdf_list_section(flow, styles, "Exclusion Criteria", protocol.get("exclusion_criteria"))
+
+    # Endpoints
+    _pdf_list_section(flow, styles, "Primary Endpoints", protocol.get("primary_endpoints"))
+    _pdf_list_section(flow, styles, "Secondary Endpoints", protocol.get("secondary_endpoints"))
+
+    # Statistics
+    enrollment = protocol.get("estimated_enrollment")
+    if enrollment:
+        _pdf_section(flow, styles, "Estimated Enrollment", str(enrollment))
+    _pdf_section(flow, styles, "Sample Size Justification", protocol.get("sample_size_justification"))
+    _pdf_section(flow, styles, "Statistical Analysis", protocol.get("statistical_analysis"))
+
+    # Safety
+    _pdf_section(flow, styles, "Safety Monitoring", protocol.get("safety_monitoring"))
+    _pdf_section(flow, styles, "Adverse Event Reporting", protocol.get("adverse_event_reporting"))
+    _pdf_section(flow, styles, "Dose Modification", protocol.get("dose_modification"))
+
+    # Assessments
+    _pdf_section(flow, styles, "Study Assessments", protocol.get("study_assessments"))
+
+    # Schedule table
+    schedule = protocol.get("study_schedule_table")
+    if schedule and isinstance(schedule, list):
+        flow.append(Paragraph("Study Schedule", styles["h1"]))
+        data = [["Visit", "Timepoint", "Procedures"]]
+        for row in schedule:
+            data.append([
+                Paragraph(_pdf_escape(row.get("visit", "")), styles["body"]),
+                Paragraph(_pdf_escape(row.get("timepoint", "")), styles["body"]),
+                Paragraph(_pdf_escape(row.get("procedures", "")), styles["body"]),
+            ])
+        # Total content width = page - margins = 8.5" - 1.8" = 6.7"
+        tbl = Table(data, colWidths=[1.4 * inch, 1.4 * inch, 3.9 * inch])
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8f0fe")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#1a73e8")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+            ("TOPPADDING", (0, 0), (-1, 0), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        flow.append(tbl)
+        flow.append(Spacer(1, 8))
+
+    # Regulatory & Ethics
+    _pdf_section(flow, styles, "Ethical Considerations", protocol.get("ethical_considerations"))
+    _pdf_section(flow, styles, "Data Management", protocol.get("data_management"))
+    _pdf_section(flow, styles, "Regulatory Considerations", protocol.get("regulatory_considerations"))
+
+    # Demographics
+    if protocol.get("sex"):
+        _pdf_section(flow, styles, "Eligible Sex", protocol["sex"])
+    if protocol.get("minimum_age"):
+        _pdf_section(flow, styles, "Minimum Age", protocol["minimum_age"])
+
+    # Locations — always render with a placeholder when empty
+    locations = protocol.get("locations")
+    if locations:
+        _pdf_list_section(flow, styles, "Locations", locations)
+    else:
+        flow.append(Paragraph("Locations", styles["h1"]))
+        flow.append(Paragraph(placeholder, styles["placeholder"]))
+        flow.append(Paragraph(
+            "(to be completed: site name, city, state, country)", styles["placeholder"],
+        ))
+
+    # Contact — always render with a placeholder when empty
+    contact = protocol.get("contact_info")
+    flow.append(Paragraph("Contact Information", styles["h1"]))
+    if contact:
+        flow.append(Paragraph(_pdf_escape(contact), styles["body"]))
+    else:
+        for sub_label in ("Principal Investigator", "Institution", "Email", "Phone"):
+            flow.append(Paragraph(
+                f"<b>{sub_label}:</b> {placeholder}", styles["placeholder"],
+            ))
+
+    # References
+    _pdf_list_section(flow, styles, "References", protocol.get("references"))
+
+    doc.build(flow)
+    buffer.seek(0)
+    return buffer
