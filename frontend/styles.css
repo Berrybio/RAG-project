@@ -298,6 +298,12 @@ input[type="range"] {
     line-height: 1.6;
 }
 
+.protocol-placeholder {
+    color: var(--text-secondary);
+    font-style: italic;
+    letter-spacing: 0.5px;
+}
+
 #protocol-preview table {
     width: 100%;
     border-collapse: collapse;

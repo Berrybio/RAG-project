@@ -34,15 +34,19 @@ function renderProtocolPreview(p, targetId = "protocol-preview") {
   html += `<h2>${escapeHtml(p.title)}</h2>`;
   if (p.official_title) html += `<p><em>${escapeHtml(p.official_title)}</em></p>`;
 
+  // Protocol ID and Sponsor always show, even when empty — render a visible
+  // placeholder so the clinician knows to fill them in.
+  const blank = '<span class="protocol-placeholder">________________</span>';
   const metaFields = [
-    ["Protocol ID", p.protocol_id],
-    ["Sponsor", p.sponsor],
-    ["Phase", p.phase],
-    ["Conditions", p.conditions],
+    ["Protocol ID", p.protocol_id, true],
+    ["Sponsor", p.sponsor, true],
+    ["Phase", p.phase, false],
+    ["Conditions", p.conditions, false],
   ];
   html += '<div class="meta" style="margin:12px 0">';
-  metaFields.forEach(([label, val]) => {
+  metaFields.forEach(([label, val, always]) => {
     if (val) html += `<span><strong>${label}:</strong> ${escapeHtml(val)}</span>  `;
+    else if (always) html += `<span><strong>${label}:</strong> ${blank}</span>  `;
   });
   html += "</div>";
 
@@ -79,7 +83,26 @@ function renderProtocolPreview(p, targetId = "protocol-preview") {
   if (p.safety_monitoring)
     html += `<h3>Safety Monitoring</h3><p>${escapeHtml(p.safety_monitoring)}</p>`;
 
-  html += renderList("Locations", p.locations);
+  // Locations always render with a placeholder when empty.
+  if (p.locations && p.locations.length > 0) {
+    html += renderList("Locations", p.locations);
+  } else {
+    html += `<h3>Locations</h3>`;
+    html += `<p class="protocol-placeholder">________________________________________</p>`;
+    html += `<p class="protocol-placeholder"><em>(to be completed: site name, city, state, country)</em></p>`;
+  }
+
+  // Contact Information always renders with a placeholder block when empty.
+  html += `<h3>Contact Information</h3>`;
+  if (p.contact_info) {
+    html += `<p>${escapeHtml(p.contact_info)}</p>`;
+  } else {
+    html += `<p class="protocol-placeholder"><strong>Principal Investigator:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Institution:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Email:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Phone:</strong> ________________</p>`;
+  }
+
   html += renderList("References", p.references);
 
   preview.innerHTML = html;

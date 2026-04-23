@@ -190,16 +190,22 @@ def build_protocol_docx(protocol: dict) -> BytesIO:
         sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph("")
+    # Administrative placeholders always render (Protocol ID / Sponsor are
+    # intentionally left empty for the clinician to fill in).
+    placeholder = "_" * 40
     meta_fields = [
-        ("Protocol ID", "protocol_id"),
-        ("Sponsor", "sponsor"),
-        ("Phase", "phase"),
-        ("Status", "status"),
-        ("Conditions", "conditions"),
+        ("Protocol ID", "protocol_id", True),
+        ("Sponsor", "sponsor", True),
+        ("Phase", "phase", False),
+        ("Status", "status", False),
+        ("Conditions", "conditions", False),
     ]
-    for label, key in meta_fields:
-        if protocol.get(key):
-            doc.add_paragraph(f"{label}: {protocol[key]}")
+    for label, key, always in meta_fields:
+        value = protocol.get(key)
+        if value:
+            doc.add_paragraph(f"{label}: {value}")
+        elif always:
+            doc.add_paragraph(f"{label}: {placeholder}")
 
     doc.add_page_break()
 
@@ -270,11 +276,26 @@ def build_protocol_docx(protocol: dict) -> BytesIO:
     if protocol.get("minimum_age"):
         _add_section(doc, "Minimum Age", protocol["minimum_age"])
 
-    # Locations
-    _add_list_section(doc, "Locations", protocol.get("locations"))
+    # Locations — always render with a placeholder when the clinician
+    # has not yet filled in study sites.
+    locations = protocol.get("locations")
+    if locations:
+        _add_list_section(doc, "Locations", locations)
+    else:
+        doc.add_heading("Locations", level=1)
+        doc.add_paragraph(placeholder)
+        doc.add_paragraph("(to be completed: site name, city, state, country)")
 
-    # Contact
-    _add_section(doc, "Contact Information", protocol.get("contact_info"))
+    # Contact — always render with a placeholder.
+    contact = protocol.get("contact_info")
+    doc.add_heading("Contact Information", level=1)
+    if contact:
+        doc.add_paragraph(contact)
+    else:
+        doc.add_paragraph(f"Principal Investigator: {placeholder}")
+        doc.add_paragraph(f"Institution: {placeholder}")
+        doc.add_paragraph(f"Email: {placeholder}")
+        doc.add_paragraph(f"Phone: {placeholder}")
 
     # References
     _add_list_section(doc, "References", protocol.get("references"))
