@@ -1,31 +1,5 @@
 const API_BASE = "http://localhost:8000/api";
 
-// --- Tab switching ---
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach((c) => c.classList.remove("active"));
-    tab.classList.add("active");
-    document.getElementById(`${tab.dataset.tab}-tab`).classList.add("active");
-  });
-});
-
-// --- Range slider labels ---
-document.getElementById("search-topk").addEventListener("input", (e) => {
-  document.getElementById("search-topk-val").textContent = e.target.value;
-});
-document.getElementById("protocol-topk").addEventListener("input", (e) => {
-  document.getElementById("protocol-topk-val").textContent = e.target.value;
-});
-
-// --- Example buttons ---
-document.querySelectorAll(".example-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.getElementById("search-query").value = btn.dataset.query;
-    document.getElementById("search-btn").click();
-  });
-});
-
 // --- Source card rendering ---
 function renderSourceCard(source) {
   return `
@@ -52,185 +26,6 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// ===================== SEARCH =====================
-
-document.getElementById("search-btn").addEventListener("click", async () => {
-  const query = document.getElementById("search-query").value.trim();
-  if (!query) return;
-
-  const topK = parseInt(document.getElementById("search-topk").value);
-  const btn = document.getElementById("search-btn");
-  const answerBox = document.getElementById("search-answer");
-  const answerContent = document.getElementById("answer-content");
-  const sourcesBox = document.getElementById("search-sources");
-  const sourcesList = document.getElementById("sources-list");
-
-  btn.disabled = true;
-  btn.textContent = "Searching...";
-  answerBox.classList.remove("hidden");
-  answerContent.textContent = "";
-  sourcesBox.classList.add("hidden");
-
-  try {
-    const evtSource = new EventSource(
-      `${API_BASE}/search/stream?query=${encodeURIComponent(query)}&top_k=${topK}`
-    );
-    let finished = false;
-
-    evtSource.addEventListener("sources", (e) => {
-      const sources = JSON.parse(e.data);
-      if (sources.length > 0) {
-        sourcesBox.classList.remove("hidden");
-        document.getElementById("source-count").textContent = `(${sources.length})`;
-        sourcesList.innerHTML = sources.map(renderSourceCard).join("");
-      }
-    });
-
-    evtSource.addEventListener("token", (e) => {
-      const token = JSON.parse(e.data);
-      answerContent.textContent += token;
-    });
-
-    evtSource.addEventListener("done", () => {
-      finished = true;
-      evtSource.close();
-      btn.disabled = false;
-      btn.textContent = "Search";
-    });
-
-    evtSource.addEventListener("error", () => {
-      // EventSource fires "error" on normal connection close too. Only surface
-      // an error message if the stream never reached "done".
-      if (finished) return;
-      evtSource.close();
-      btn.disabled = false;
-      btn.textContent = "Search";
-      if (!answerContent.textContent) {
-        answerContent.textContent = "An error occurred while searching. Please try again.";
-      }
-    });
-  } catch (err) {
-    btn.disabled = false;
-    btn.textContent = "Search";
-    answerContent.textContent = "Failed to connect to the server.";
-  }
-});
-
-// Enter key to search
-document.getElementById("search-query").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    document.getElementById("search-btn").click();
-  }
-});
-
-// ===================== PROTOCOL =====================
-
-let currentProtocol = null;
-
-document.getElementById("protocol-btn").addEventListener("click", async () => {
-  const query = document.getElementById("protocol-query").value.trim();
-  if (!query) return;
-
-  const topK = parseInt(document.getElementById("protocol-topk").value);
-  const btn = document.getElementById("protocol-btn");
-  const loading = document.getElementById("protocol-loading");
-  const result = document.getElementById("protocol-result");
-
-  btn.disabled = true;
-  btn.textContent = "Generating...";
-  loading.classList.remove("hidden");
-  result.classList.add("hidden");
-
-  try {
-    const response = await fetch(`${API_BASE}/protocol/json`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, top_k: topK }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    currentProtocol = data.protocol;
-
-    renderProtocolPreview(data.protocol);
-    document.getElementById("protocol-json-content").textContent = JSON.stringify(
-      data.protocol,
-      null,
-      2
-    );
-
-    // Reference trials
-    if (data.reference_trials && data.reference_trials.length > 0) {
-      const refsBox = document.getElementById("protocol-refs");
-      refsBox.classList.remove("hidden");
-      document.getElementById("protocol-refs-list").innerHTML = data.reference_trials
-        .map(renderSourceCard)
-        .join("");
-    }
-
-    loading.classList.add("hidden");
-    result.classList.remove("hidden");
-  } catch (err) {
-    loading.classList.add("hidden");
-    alert("Failed to generate protocol: " + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Generate Protocol";
-  }
-});
-
-// Toggle JSON view
-document.getElementById("toggle-json-btn").addEventListener("click", () => {
-  const jsonDiv = document.getElementById("protocol-json");
-  const btn = document.getElementById("toggle-json-btn");
-  jsonDiv.classList.toggle("hidden");
-  btn.textContent = jsonDiv.classList.contains("hidden") ? "Show JSON" : "Hide JSON";
-});
-
-// Download .docx
-document.getElementById("download-docx-btn").addEventListener("click", async () => {
-  if (!currentProtocol) return;
-
-  const btn = document.getElementById("download-docx-btn");
-  btn.disabled = true;
-  btn.textContent = "Downloading...";
-
-  try {
-    const response = await fetch(`${API_BASE}/protocol/docx`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ protocol: currentProtocol }),
-    });
-
-    if (!response.ok) throw new Error("Download failed");
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = (currentProtocol.protocol_id || "protocol") + ".docx";
-    a.click();
-    URL.revokeObjectURL(url);
-  } catch (err) {
-    alert("Failed to download: " + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Download as Word Document";
-  }
-});
-
-// Enter key for protocol
-document.getElementById("protocol-query").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    document.getElementById("protocol-btn").click();
-  }
-});
-
 // --- Protocol preview rendering ---
 function renderProtocolPreview(p, targetId = "protocol-preview") {
   const preview = document.getElementById(targetId);
@@ -239,15 +34,19 @@ function renderProtocolPreview(p, targetId = "protocol-preview") {
   html += `<h2>${escapeHtml(p.title)}</h2>`;
   if (p.official_title) html += `<p><em>${escapeHtml(p.official_title)}</em></p>`;
 
+  // Protocol ID and Sponsor always show, even when empty — render a visible
+  // placeholder so the clinician knows to fill them in.
+  const blank = '<span class="protocol-placeholder">________________</span>';
   const metaFields = [
-    ["Protocol ID", p.protocol_id],
-    ["Sponsor", p.sponsor],
-    ["Phase", p.phase],
-    ["Conditions", p.conditions],
+    ["Protocol ID", p.protocol_id, true],
+    ["Sponsor", p.sponsor, true],
+    ["Phase", p.phase, false],
+    ["Conditions", p.conditions, false],
   ];
   html += '<div class="meta" style="margin:12px 0">';
-  metaFields.forEach(([label, val]) => {
+  metaFields.forEach(([label, val, always]) => {
     if (val) html += `<span><strong>${label}:</strong> ${escapeHtml(val)}</span>  `;
+    else if (always) html += `<span><strong>${label}:</strong> ${blank}</span>  `;
   });
   html += "</div>";
 
@@ -284,7 +83,26 @@ function renderProtocolPreview(p, targetId = "protocol-preview") {
   if (p.safety_monitoring)
     html += `<h3>Safety Monitoring</h3><p>${escapeHtml(p.safety_monitoring)}</p>`;
 
-  html += renderList("Locations", p.locations);
+  // Locations always render with a placeholder when empty.
+  if (p.locations && p.locations.length > 0) {
+    html += renderList("Locations", p.locations);
+  } else {
+    html += `<h3>Locations</h3>`;
+    html += `<p class="protocol-placeholder">________________________________________</p>`;
+    html += `<p class="protocol-placeholder"><em>(to be completed: site name, city, state, country)</em></p>`;
+  }
+
+  // Contact Information always renders with a placeholder block when empty.
+  html += `<h3>Contact Information</h3>`;
+  if (p.contact_info) {
+    html += `<p>${escapeHtml(p.contact_info)}</p>`;
+  } else {
+    html += `<p class="protocol-placeholder"><strong>Principal Investigator:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Institution:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Email:</strong> ________________</p>`;
+    html += `<p class="protocol-placeholder"><strong>Phone:</strong> ________________</p>`;
+  }
+
   html += renderList("References", p.references);
 
   preview.innerHTML = html;
@@ -349,6 +167,46 @@ function attachSourcesToMessage(messageDiv, sources) {
   messageDiv.appendChild(details);
 }
 
+// Parse a [CHOICES] ... [/CHOICES] block out of assistant text and return
+// { cleanText, choices: string[] }. Tolerates leading whitespace and
+// preserves the prose before the block as the visible message.
+function extractChoices(text) {
+  const re = /\[CHOICES\]\s*([\s\S]*?)\s*\[\/CHOICES\]/i;
+  const m = text.match(re);
+  if (!m) return { cleanText: text, choices: [] };
+  const block = m[1];
+  const choices = block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.slice(2).trim())
+    .filter(Boolean);
+  const cleanText = text.replace(re, "").trim();
+  return { cleanText, choices };
+}
+
+function attachChoicesToMessage(messageDiv, choices) {
+  if (!choices || choices.length === 0) return;
+  const wrap = document.createElement("div");
+  wrap.className = "choice-chips";
+  for (const choice of choices) {
+    const btn = document.createElement("button");
+    btn.className = "choice-chip";
+    btn.type = "button";
+    btn.textContent = choice;
+    btn.addEventListener("click", () => {
+      // Disable every chip in this group so the clinician can't double-click.
+      wrap.querySelectorAll(".choice-chip").forEach((b) => (b.disabled = true));
+      btn.classList.add("selected");
+      const input = plannerEls().input;
+      input.value = choice;
+      plannerSend();
+    });
+    wrap.appendChild(btn);
+  }
+  messageDiv.appendChild(wrap);
+}
+
 function revealPlannerActions() {
   plannerEls().summarizeBtn.classList.remove("hidden");
 }
@@ -371,7 +229,6 @@ async function plannerSend() {
   const query = e.input.value.trim();
   if (!query) return;
 
-  // Append user message to state and UI
   plannerState.messages.push({ role: "user", content: query });
   addChatMessage("user", query);
   e.input.value = "";
@@ -443,9 +300,19 @@ async function plannerSend() {
       contentNode.nodeValue = assistantText;
     }
 
-    // Persist assistant turn
+    // Strip any [CHOICES] block out of the bubble text and render the
+    // options as clickable chips below the message. The full (unstripped)
+    // text goes into conversation history so the model can see what it
+    // offered, but the UI only shows the prose and the chips.
+    const { cleanText, choices } = extractChoices(assistantText);
+    if (choices.length > 0) {
+      contentNode.nodeValue = cleanText;
+    }
+
+    // Persist assistant turn (keep original text in history for LLM context).
     plannerState.messages.push({ role: "assistant", content: assistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
+    attachChoicesToMessage(assistantDiv, choices);
     revealPlannerActions();
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
