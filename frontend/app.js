@@ -142,6 +142,7 @@ const plannerEls = () => ({
   protocolResult: document.getElementById("planner-protocol-result"),
   protocolPreview: document.getElementById("planner-protocol-preview"),
   downloadBtn: document.getElementById("planner-download-docx-btn"),
+  downloadPdfBtn: document.getElementById("planner-download-pdf-btn"),
 });
 
 function addChatMessage(role, content) {
@@ -381,13 +382,16 @@ async function plannerGenerateProtocol() {
   }
 }
 
-async function plannerDownloadProtocol() {
+// Download the current protocol in the given format ("docx" or "pdf").
+async function plannerDownloadProtocolAs(format) {
   const e = plannerEls();
   if (!plannerState.currentProtocol) return;
-  e.downloadBtn.disabled = true;
-  e.downloadBtn.textContent = "Downloading...";
+  const btn = format === "pdf" ? e.downloadPdfBtn : e.downloadBtn;
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Downloading...";
   try {
-    const resp = await fetch(`${API_BASE}/protocol/docx`, {
+    const resp = await fetch(`${API_BASE}/protocol/${format}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ protocol: plannerState.currentProtocol }),
@@ -397,14 +401,15 @@ async function plannerDownloadProtocol() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = (plannerState.currentProtocol.protocol_id || "protocol") + ".docx";
+    const stem = (plannerState.currentProtocol.protocol_id || "").trim() || "protocol";
+    a.download = `${stem}.${format}`;
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
     alert(`Failed to download: ${err.message}`);
   } finally {
-    e.downloadBtn.disabled = false;
-    e.downloadBtn.textContent = "Download as Word Document";
+    btn.disabled = false;
+    btn.textContent = originalText;
   }
 }
 
@@ -417,7 +422,10 @@ async function plannerDownloadProtocol() {
   e.resetBtn.addEventListener("click", resetPlanner);
   e.genProtocolBtn.addEventListener("click", plannerGenerateProtocol);
   e.skipProtocolBtn.addEventListener("click", () => e.summaryBox.classList.add("hidden"));
-  e.downloadBtn.addEventListener("click", plannerDownloadProtocol);
+  e.downloadBtn.addEventListener("click", () => plannerDownloadProtocolAs("docx"));
+  if (e.downloadPdfBtn) {
+    e.downloadPdfBtn.addEventListener("click", () => plannerDownloadProtocolAs("pdf"));
+  }
   e.topk.addEventListener("input", (evt) => { e.topkVal.textContent = evt.target.value; });
   e.input.addEventListener("keydown", (evt) => {
     if (evt.key === "Enter" && !evt.shiftKey) {
