@@ -12,9 +12,18 @@ from .generation import format_context
 logger = logging.getLogger(__name__)
 
 PROTOCOL_SYSTEM_PROMPT = """\
-You are an expert clinical research physician who designs clinical trial protocols.
-Given a set of reference trials retrieved from ClinicalTrials.gov, draft a NEW
-Phase II breast cancer clinical trial protocol.
+You are an expert clinical research physician who designs clinical trial and
+real-world evidence study protocols. Given a set of reference trials retrieved
+from ClinicalTrials.gov, draft a NEW breast cancer study protocol.
+
+First, INFER THE STUDY TYPE from the user's query:
+- If the query mentions "real-world evidence", "RWE", "retrospective", "cohort",
+  "registry", "claims data", "EHR-based", or "observational", treat this as an
+  OBSERVATIONAL / REAL-WORLD EVIDENCE study — NOT a phase-numbered interventional
+  trial. Set "phase": "N/A" (observational studies do not have phases).
+- If the query specifies "Phase I", "Phase II", "Phase III", or "Phase IV", use
+  that phase.
+- If no study type is specified, default to "Phase II" interventional.
 
 Return your answer as a single JSON object (no markdown fences) with exactly
 these keys:
@@ -24,7 +33,7 @@ these keys:
   "official_title": "Full formal title including phase and design",
   "protocol_id": "",
   "sponsor": "",
-  "phase": "Phase II",
+  "phase": "Phase II (or Phase I / III / IV; use 'N/A' for observational / RWE)",
   "status": "PLANNED",
   "conditions": "Specific breast cancer subtype(s)",
   "summary": "2-3 sentence plain-language summary",
@@ -86,7 +95,37 @@ STUDY CENTER CONVENTION:
   MULTI-CENTER.
 Reflect this in "study_design" and "study_schema" (e.g., "Single-center,
 randomized, open-label Phase II trial..."). The "locations" array still stays
-empty — the user will supply the site."""
+empty — the user will supply the site.
+
+OBSERVATIONAL / RWE ADAPTATIONS (when phase is "N/A"):
+- NEVER use the words "Phase II" (or any phase) anywhere in title,
+  official_title, description, study_design, study_schema, statistical_analysis,
+  or any other field. This is not a phased trial.
+- "study_design" should describe the observational design
+  (e.g., "Multi-center retrospective cohort study", "Prospective observational
+  registry", "Target trial emulation using claims data").
+- "intervention_name" → describe the EXPOSURE being studied (e.g.,
+  "CDK4/6 inhibitor therapy (palbociclib, ribociclib, or abemaciclib) plus
+  endocrine therapy"), not a drug the investigator administers.
+- "intervention_description" → describe how exposure is ascertained and
+  categorized (EHR review, pharmacy claims, dispensing records), NOT dosing
+  regimens the protocol prescribes.
+- "comparator" → describe the reference cohort (e.g., "Endocrine therapy
+  alone").
+- "treatment_duration" → describe the observation / follow-up window.
+- "primary_endpoints" / "secondary_endpoints" → real-world outcomes
+  (rwPFS, rwOS, time-to-next-treatment, adherence, healthcare utilization).
+- "safety_monitoring", "adverse_event_reporting", "dose_modification" →
+  set to "Not applicable — observational study" (or describe passive
+  pharmacovigilance / post-marketing surveillance signals).
+- "study_assessments" and "study_schedule_table" → describe data collection
+  timepoints and variables (index date, baseline covariates, follow-up
+  outcomes), not on-treatment clinic visits.
+- "sample_size_justification" → feasibility / precision for the effect size
+  of interest, not power for an interventional endpoint.
+- "statistical_analysis" → observational methods (propensity score matching /
+  weighting, IPTW, Cox models with time-varying confounders, sensitivity
+  analyses for unmeasured confounding, target trial emulation framework)."""
 
 
 async def generate_protocol_json(
@@ -99,11 +138,15 @@ async def generate_protocol_json(
     context = format_context(retrieved_docs)
 
     user_msg = (
-        f"The user wants to plan a clinical trial with this focus:\n"
+        f"The user wants to plan a breast cancer study with this focus:\n"
         f'"{query}"\n\n'
         f"=== REFERENCE TRIALS FROM DATABASE ===\n{context}\n"
         f"=== END ===\n\n"
-        f"Draft a new Phase II breast cancer trial protocol as JSON."
+        f"Infer the study type from the user's focus above (interventional "
+        f"phase I-IV, or observational / real-world evidence). Draft the "
+        f"protocol as JSON following the system prompt schema. If the user "
+        f"asked for a real-world evidence / observational study, do NOT "
+        f"label it as Phase II anywhere."
     )
 
     # Use streaming for long generations (max_tokens=8192). Non-streaming
