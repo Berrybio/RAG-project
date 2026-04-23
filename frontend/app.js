@@ -349,6 +349,46 @@ function attachSourcesToMessage(messageDiv, sources) {
   messageDiv.appendChild(details);
 }
 
+// Parse a [CHOICES] ... [/CHOICES] block out of assistant text and return
+// { cleanText, choices: string[] }. Tolerates leading whitespace and
+// preserves the prose before the block as the visible message.
+function extractChoices(text) {
+  const re = /\[CHOICES\]\s*([\s\S]*?)\s*\[\/CHOICES\]/i;
+  const m = text.match(re);
+  if (!m) return { cleanText: text, choices: [] };
+  const block = m[1];
+  const choices = block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.slice(2).trim())
+    .filter(Boolean);
+  const cleanText = text.replace(re, "").trim();
+  return { cleanText, choices };
+}
+
+function attachChoicesToMessage(messageDiv, choices) {
+  if (!choices || choices.length === 0) return;
+  const wrap = document.createElement("div");
+  wrap.className = "choice-chips";
+  for (const choice of choices) {
+    const btn = document.createElement("button");
+    btn.className = "choice-chip";
+    btn.type = "button";
+    btn.textContent = choice;
+    btn.addEventListener("click", () => {
+      // Disable every chip in this group so the clinician can't double-click.
+      wrap.querySelectorAll(".choice-chip").forEach((b) => (b.disabled = true));
+      btn.classList.add("selected");
+      const input = plannerEls().input;
+      input.value = choice;
+      plannerSend();
+    });
+    wrap.appendChild(btn);
+  }
+  messageDiv.appendChild(wrap);
+}
+
 function revealPlannerActions() {
   plannerEls().summarizeBtn.classList.remove("hidden");
 }
@@ -371,7 +411,6 @@ async function plannerSend() {
   const query = e.input.value.trim();
   if (!query) return;
 
-  // Append user message to state and UI
   plannerState.messages.push({ role: "user", content: query });
   addChatMessage("user", query);
   e.input.value = "";
@@ -443,9 +482,19 @@ async function plannerSend() {
       contentNode.nodeValue = assistantText;
     }
 
-    // Persist assistant turn
+    // Strip any [CHOICES] block out of the bubble text and render the
+    // options as clickable chips below the message. The full (unstripped)
+    // text goes into conversation history so the model can see what it
+    // offered, but the UI only shows the prose and the chips.
+    const { cleanText, choices } = extractChoices(assistantText);
+    if (choices.length > 0) {
+      contentNode.nodeValue = cleanText;
+    }
+
+    // Persist assistant turn (keep original text in history for LLM context).
     plannerState.messages.push({ role: "assistant", content: assistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
+    attachChoicesToMessage(assistantDiv, choices);
     revealPlannerActions();
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
