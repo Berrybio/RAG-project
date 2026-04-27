@@ -14,15 +14,26 @@ from collections.abc import AsyncGenerator
 import anthropic
 
 from .generation import format_context
+from .landscape import format_landscape_for_llm
 
 logger = logging.getLogger(__name__)
 
 CHAT_SYSTEM_PROMPT = """\
 You are a clinical trials research assistant helping a clinician plan a breast cancer trial.
 
-You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn \
-includes a <trials> section with the trials retrieved for that question. Rely on those trials \
-for trial-specific facts (NCT IDs, enrollment, eligibility, endpoints, etc).
+You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn may \
+include two distinct context blocks:
+
+- <landscape>: deterministic aggregate statistics over the FULL matching population (total \
+trial count, status distribution, drug-class / modality counts). When the user asks \
+"how many" or "what's available", answer using the totals from <landscape>. NEVER report \
+the number of trials from <trials> as the population total — <trials> is just a sample.
+
+- <trials>: a small REPRESENTATIVE SAMPLE (typically 8-15 trials) selected to span drug \
+classes / modalities, not the highest-similarity matches. Use these for trial-specific \
+facts (NCT IDs, enrollment, eligibility, endpoints, regimens) and for concrete examples \
+of each drug class. When listing examples, prefer ONE trial per drug class so the user \
+sees diverse coverage.
 
 Clarification checklist (ask at most ONE of these per turn, earliest first, and only \
 if the answer is not already established earlier in the conversation):
@@ -72,18 +83,32 @@ Write in plain prose, not bullet points. Do not invent details. Finish by asking
 """
 
 
-def _augment_with_context(user_content: str, retrieved_docs: list[dict]) -> str:
-    if not retrieved_docs:
-        return user_content
-    n = len(retrieved_docs)
-    nct_ids = [doc["metadata"].get("nctId", "unknown") for doc in retrieved_docs]
-    context = format_context(retrieved_docs)
-    return (
-        f"<trials>\n{context}\n</trials>\n\n"
-        f"{n} trial(s) retrieved for this question "
-        f"(NCT IDs: {', '.join(nct_ids)}).\n\n"
-        f"Question: {user_content}"
-    )
+def _augment_with_context(
+    user_content: str,
+    retrieved_docs: list[dict],
+    landscape: dict | None = None,
+) -> str:
+    parts: list[str] = []
+
+    if landscape:
+        landscape_text = format_landscape_for_llm(landscape)
+        if landscape_text:
+            parts.append(f"<landscape>\n{landscape_text}\n</landscape>")
+
+    if retrieved_docs:
+        n = len(retrieved_docs)
+        nct_ids = [doc["metadata"].get("nctId", "unknown") for doc in retrieved_docs]
+        context = format_context(retrieved_docs)
+        sample_note = (
+            f"{n} representative trial(s) in this sample, selected to span drug classes "
+            f"(NCT IDs: {', '.join(nct_ids)})."
+            if landscape
+            else f"{n} trial(s) retrieved for this question (NCT IDs: {', '.join(nct_ids)})."
+        )
+        parts.append(f"<trials>\n{context}\n</trials>\n\n{sample_note}")
+
+    parts.append(f"Question: {user_content}")
+    return "\n\n".join(parts)
 
 
 async def generate_chat_stream(
@@ -91,11 +116,13 @@ async def generate_chat_stream(
     messages: list[dict],
     retrieved_docs: list[dict],
     model: str,
+    landscape: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
     `messages` is the full conversation history as [{role, content}, ...].
-    Retrieved trials are attached to the latest user turn only.
+    Retrieved trials and (optionally) a landscape stats block are attached to
+    the latest user turn only — older turns keep their original content.
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Chat history must end with a user message")
@@ -103,7 +130,7 @@ async def generate_chat_stream(
     augmented = list(messages)
     augmented[-1] = {
         "role": "user",
-        "content": _augment_with_context(messages[-1]["content"], retrieved_docs),
+        "content": _augment_with_context(messages[-1]["content"], retrieved_docs, landscape),
     }
 
     async with client.messages.stream(

@@ -439,3 +439,118 @@ footer {
     color: white;
     opacity: 1;
 }
+
+/* ===== Landscape card (first-turn population brief) ===== */
+.landscape-card {
+    background: linear-gradient(135deg, #f4f8ff 0%, #fafbff 100%);
+    border: 1px solid #c7d8f5;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin: 8px 0 12px;
+    font-size: 13.5px;
+    color: var(--text);
+    box-shadow: 0 1px 2px rgba(26, 115, 232, 0.06);
+}
+.landscape-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.landscape-title {
+    font-weight: 600;
+    color: var(--primary-dark);
+    font-size: 14px;
+    letter-spacing: 0.2px;
+}
+.landscape-filter-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.landscape-filter-chip {
+    background: var(--primary);
+    color: #fff;
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11.5px;
+    font-weight: 500;
+}
+.landscape-filter-chips-empty {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
+}
+.landscape-total {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+.landscape-total strong {
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+}
+.landscape-total-note {
+    font-size: 12px;
+}
+.landscape-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 22px;
+}
+.landscape-grid section h4 {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+}
+.landscape-grid-wide {
+    grid-column: 1 / -1;
+}
+.landscape-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1.6fr) minmax(60px, 3fr) minmax(70px, auto);
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    font-size: 12.5px;
+}
+.landscape-row-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+.landscape-row-bar {
+    background: #e3ebf7;
+    border-radius: 4px;
+    height: 8px;
+    overflow: hidden;
+}
+.landscape-row-fill {
+    background: var(--primary);
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+.landscape-row-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: right;
+}
+.landscape-row-pct {
+    color: #9aa0a6;
+}
+.landscape-empty {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+@media (max-width: 700px) {
+    .landscape-grid { grid-template-columns: 1fr; }
+}
