@@ -13,6 +13,7 @@ function renderSourceCard(source) {
       <div class="meta">
         <span>Phase: ${escapeHtml(source.phases)}</span>
         <span>Status: ${escapeHtml(source.status)}</span>
+        <span>Sponsor: ${escapeHtml(source.sponsor || "N/A")}</span>
         <span>Intervention: ${escapeHtml(source.intervention || "N/A")}</span>
         <span>Enrollment: ${escapeHtml(String(source.enrollment))}</span>
       </div>
@@ -24,6 +25,33 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text || "";
   return div.innerHTML;
+}
+
+// Build a span whose children alternate between plain text nodes and <a>
+// elements wrapping NCT IDs (e.g. "NCT06841354"). Using DOM nodes rather than
+// innerHTML keeps the LLM-emitted text safe from injection — only the matched
+// NCT pattern is ever placed inside an anchor's href.
+function linkifyNctIds(text) {
+  const span = document.createElement("span");
+  const re = /\bNCT\d{8}\b/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) {
+      span.appendChild(document.createTextNode(text.slice(last, m.index)));
+    }
+    const a = document.createElement("a");
+    a.href = `https://clinicaltrials.gov/study/${m[0]}`;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = m[0];
+    span.appendChild(a);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) {
+    span.appendChild(document.createTextNode(text.slice(last)));
+  }
+  return span;
 }
 
 // --- Protocol preview rendering ---
@@ -134,6 +162,7 @@ const plannerEls = () => ({
   resetBtn: document.getElementById("planner-reset-btn"),
   topk: document.getElementById("planner-topk"),
   topkVal: document.getElementById("planner-topk-val"),
+  showLandscape: document.getElementById("planner-show-landscape"),
   summaryBox: document.getElementById("planner-summary-box"),
   summaryContent: document.getElementById("planner-summary-content"),
   genProtocolBtn: document.getElementById("planner-generate-protocol-btn"),
@@ -375,6 +404,7 @@ async function plannerSend() {
       body: JSON.stringify({
         messages: plannerState.messages,
         top_k: parseInt(e.topk.value),
+        include_landscape: e.showLandscape.checked,
       }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
@@ -442,6 +472,14 @@ async function plannerSend() {
     if (choices.length > 0) {
       contentNode.nodeValue = cleanText;
     }
+
+    // Replace the streaming text node with a span that linkifies any NCT IDs
+    // (NCT followed by 8 digits) to clinicaltrials.gov so the clinician can
+    // click through to the source. Done after streaming completes — easier
+    // than diffing partial tokens that may split an NCT ID across chunks.
+    const finalText = choices.length > 0 ? cleanText : assistantText;
+    const linkified = linkifyNctIds(finalText);
+    assistantDiv.replaceChild(linkified, contentNode);
 
     // Persist assistant turn (keep original text in history for LLM context).
     plannerState.messages.push({ role: "assistant", content: assistantText });
