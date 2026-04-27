@@ -155,6 +155,130 @@ function addChatMessage(role, content) {
   return div;
 }
 
+// Map raw enum-style filter values to clinician-friendly labels.
+const LANDSCAPE_PHASE_LABEL = {
+  EARLY_PHASE1: "Early Phase 1",
+  PHASE1: "Phase 1",
+  PHASE2: "Phase 2",
+  PHASE3: "Phase 3",
+  PHASE4: "Phase 4",
+};
+const LANDSCAPE_STATUS_LABEL = {
+  RECRUITING: "Recruiting",
+  NOT_YET_RECRUITING: "Not yet recruiting",
+  ACTIVE_NOT_RECRUITING: "Active, not recruiting",
+  COMPLETED: "Completed",
+  TERMINATED: "Terminated",
+  WITHDRAWN: "Withdrawn",
+  SUSPENDED: "Suspended",
+  UNKNOWN: "Unknown",
+  ENROLLING_BY_INVITATION: "Enrolling by invitation",
+};
+
+function landscapePhaseLabel(p) {
+  return LANDSCAPE_PHASE_LABEL[p] || p || "Unspecified";
+}
+function landscapeStatusLabel(s) {
+  return LANDSCAPE_STATUS_LABEL[s] || s || "Unspecified";
+}
+
+function landscapeBar(label, count, total) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return `
+    <div class="landscape-row">
+      <div class="landscape-row-label">${escapeHtml(label)}</div>
+      <div class="landscape-row-bar"><div class="landscape-row-fill" style="width:${pct}%"></div></div>
+      <div class="landscape-row-count">${count}<span class="landscape-row-pct"> · ${pct}%</span></div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderLandscapeCard(L) {
+  const div = document.createElement("div");
+  div.className = "landscape-card";
+  const filters = L.filters_applied || {};
+  const filterChips = [];
+  if (filters.phase) filterChips.push(landscapePhaseLabel(filters.phase));
+  if (filters.status) filterChips.push(landscapeStatusLabel(filters.status));
+  const filterLine = filterChips.length
+    ? `<span class="landscape-filter-chips">${filterChips
+        .map((c) => `<span class="landscape-filter-chip">${escapeHtml(c)}</span>`)
+        .join("")}</span>`
+    : `<span class="landscape-filter-chips landscape-filter-chips-empty">no filters — showing whole population</span>`;
+
+  // If filtered out everything, render an explanatory empty-state instead of empty bars.
+  if (!L.total) {
+    div.innerHTML = `
+      <div class="landscape-header">
+        <div class="landscape-title">Landscape · ${escapeHtml(L.population)}</div>
+        ${filterLine}
+      </div>
+      <div class="landscape-empty">
+        No trials match these filters strictly.
+        ${L.disease_total ? `(${L.disease_total} ${escapeHtml(L.population)} trials in the corpus overall.)` : ""}
+      </div>`;
+    return div;
+  }
+
+  const phases = (L.phase_distribution || []).map((r) =>
+    landscapeBar(landscapePhaseLabel(r.phase), r.count, L.total)
+  ).join("");
+  const statuses = (L.status_distribution || []).slice(0, 8).map((r) =>
+    landscapeBar(landscapeStatusLabel(r.status), r.count, L.total)
+  ).join("");
+  const drugClasses = (L.drug_classes || []).slice(0, 12).map((r) =>
+    landscapeBar(r.class, r.count, L.total)
+  ).join("");
+  const geo = (L.geography_top || []).slice(0, 8).map((r) =>
+    landscapeBar(r.country, r.count, L.total)
+  ).join("");
+  const sponsors = (L.sponsor_class || []).map((r) =>
+    landscapeBar(r.class, r.count, L.total)
+  ).join("");
+
+  const totalNote =
+    L.disease_total && L.disease_total !== L.total
+      ? ` <span class="landscape-total-note">of ${L.disease_total} total in corpus</span>`
+      : "";
+
+  div.innerHTML = `
+    <div class="landscape-header">
+      <div class="landscape-title">Landscape · ${escapeHtml(L.population)}</div>
+      ${filterLine}
+    </div>
+    <div class="landscape-total"><strong>${L.total}</strong> matching trials${totalNote}</div>
+    <div class="landscape-grid">
+      <section>
+        <h4>Phase</h4>
+        ${phases || '<div class="landscape-empty">none</div>'}
+      </section>
+      <section>
+        <h4>Status</h4>
+        ${statuses || '<div class="landscape-empty">none</div>'}
+      </section>
+      <section class="landscape-grid-wide">
+        <h4>Drug class / modality</h4>
+        ${drugClasses || '<div class="landscape-empty">no recognized drug classes</div>'}
+      </section>
+      <section>
+        <h4>Top countries</h4>
+        ${geo || '<div class="landscape-empty">none</div>'}
+      </section>
+      <section>
+        <h4>Sponsor class</h4>
+        ${sponsors || '<div class="landscape-empty">none</div>'}
+      </section>
+    </div>`;
+  return div;
+}
+
 function attachSourcesToMessage(messageDiv, sources) {
   if (!sources || sources.length === 0) return;
   const details = document.createElement("details");
@@ -278,7 +402,16 @@ async function plannerSend() {
         }
         if (!data) continue;
 
-        if (evt === "sources") {
+        if (evt === "landscape") {
+          try {
+            const landscape = JSON.parse(data);
+            // Insert the landscape card before the assistant bubble so the
+            // clinician sees population context first, then the streamed reply.
+            const card = renderLandscapeCard(landscape);
+            e.messagesBox.insertBefore(card, assistantDiv);
+            e.messagesBox.scrollTop = e.messagesBox.scrollHeight;
+          } catch {}
+        } else if (evt === "sources") {
           try { streamSources = JSON.parse(data); } catch { streamSources = []; }
         } else if (evt === "token") {
           try {
