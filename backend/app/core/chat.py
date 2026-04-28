@@ -13,6 +13,7 @@ from collections.abc import AsyncGenerator
 
 import anthropic
 
+from .feedback import aliases_prompt_block
 from .generation import format_context
 from .landscape import format_landscape_for_llm
 
@@ -166,12 +167,15 @@ async def generate_chat_stream(
     retrieved_docs: list[dict],
     model: str,
     landscape: dict | None = None,
+    aliases: dict[str, str] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
     `messages` is the full conversation history as [{role, content}, ...].
     Retrieved trials and (optionally) a landscape stats block are attached to
     the latest user turn only — older turns keep their original content.
+    `aliases` (when provided) is appended to the system prompt as a "Known
+    drug aliases" block so the model uses canonical names in its prose.
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Chat history must end with a user message")
@@ -182,10 +186,15 @@ async def generate_chat_stream(
         "content": _augment_with_context(messages[-1]["content"], retrieved_docs, landscape),
     }
 
+    system_prompt = CHAT_SYSTEM_PROMPT
+    aliases_block = aliases_prompt_block(aliases or {})
+    if aliases_block:
+        system_prompt = f"{system_prompt}\n\n{aliases_block}"
+
     async with client.messages.stream(
         model=model,
         max_tokens=4096,
-        system=CHAT_SYSTEM_PROMPT,
+        system=system_prompt,
         messages=augmented,
     ) as stream:
         async for text in stream.text_stream:

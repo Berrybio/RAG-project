@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..dependencies import get_pipeline, get_client
+from ..dependencies import get_aliases, get_pipeline, get_client
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.chat import generate_chat_stream, summarize_conversation
+from ..core.feedback import expand_query
 from ..core.landscape import (
     compute_landscape,
     detect_disease,
@@ -55,6 +56,7 @@ async def chat_stream(
     body: ChatRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
     client: anthropic.AsyncAnthropic = Depends(get_client),
+    aliases: dict = Depends(get_aliases),
 ):
     if body.messages[-1].role != "user":
         return {"error": "Last message must be from user"}
@@ -71,6 +73,10 @@ async def chat_stream(
     retrieval_query = latest_query
     if merged_filters and not detect_disease(latest_query):
         retrieval_query = f"{merged_filters['disease_name']} — {latest_query}"
+    # Expand any user-curated drug aliases (e.g. "Dato-DXd" -> append
+    # "Datopotamab deruxtecan") so retrieval matches the canonical name in
+    # the trial CSV. Original wording stays in `latest_query` for the LLM.
+    retrieval_query = expand_query(retrieval_query, aliases)
 
     # When a population is established AND the clinician opted into the
     # landscape view, fetch a wide pool and diversify across drug classes so
@@ -132,7 +138,10 @@ async def chat_stream(
         yield f"event: sources\ndata: {json.dumps(source_docs)}\n\n"
 
         try:
-            async for token in generate_chat_stream(client, history, retrieved, pipeline.model, landscape=landscape):
+            async for token in generate_chat_stream(
+                client, history, retrieved, pipeline.model,
+                landscape=landscape, aliases=aliases,
+            ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"
         except Exception as e:
