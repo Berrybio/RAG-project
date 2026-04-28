@@ -188,6 +188,119 @@ async def generate_protocol_json(
     return protocol
 
 
+REFINE_SYSTEM_PROMPT = """\
+You are revising an existing breast-cancer study protocol JSON in response to a
+clinician's correction request. The clinician has reviewed the draft and is
+pointing out a factual or design error, or asking for a targeted change.
+
+Your job:
+1. Apply the requested change accurately and propagate any DIRECTLY IMPLIED
+   downstream consistency fixes. For example, if the clinician corrects the
+   control arm from "investigator's choice chemotherapy" to "pembrolizumab
+   monotherapy", you must also fix:
+     - primary_objectives / secondary_objectives that reference the comparator
+     - intervention_description / study_schema / study_design arm descriptions
+     - sample_size_justification if it assumed the wrong control effect size
+     - any phrasing that miscategorizes the comparator (e.g. calling
+       pembrolizumab a "chemotherapy")
+2. Preserve EVERYTHING else exactly as-is. Do not rewrite unrelated sections,
+   do not "improve" wording, do not add new fields, do not change administrative
+   placeholders (protocol_id, sponsor, locations, contact_info stay as the
+   user provided them — empty if empty).
+3. Keep the same JSON schema (same keys, same types). Return the FULL updated
+   protocol JSON object, not a diff.
+
+After the JSON, on a new line, write a single line starting with "CHANGES:"
+listing the keys you modified, comma-separated, e.g.
+   CHANGES: comparator, primary_objectives, intervention_description
+
+Then on the next line, write a single line starting with "NOTE:" with a short
+(1-2 sentence) plain-English summary of what changed and why, addressed to the
+clinician (e.g. "Updated the control arm to pembrolizumab monotherapy and
+removed the 'chemotherapy' framing — pembrolizumab is a PD-1 immune checkpoint
+inhibitor, not a cytotoxic chemotherapy.").
+
+Output format (no markdown fences):
+<full JSON object>
+CHANGES: <comma-separated keys>
+NOTE: <short summary>
+
+Follow all the same domain conventions as the original protocol prompt:
+- Empty admin fields stay empty.
+- Observational/RWE studies keep phase "N/A" with no phase language anywhere.
+- Single-center default for Phase I/II, multi-center for Phase III and RWE."""
+
+
+async def refine_protocol_json(
+    client: anthropic.AsyncAnthropic,
+    current_protocol: dict,
+    refinement_messages: list[dict],
+    original_summary: str,
+    model: str = "claude-sonnet-4-20250514",
+) -> tuple[dict, str, list[str]]:
+    """Apply a clinician's correction request to an existing protocol.
+
+    Returns (updated_protocol, assistant_note, changed_fields).
+    `refinement_messages` is the running refinement conversation
+    [{role, content}, ...] with the latest user request last.
+    """
+    history_lines = []
+    for msg in refinement_messages[:-1]:
+        role = "Clinician" if msg["role"] == "user" else "Assistant"
+        history_lines.append(f"{role}: {msg['content']}")
+    prior_history = "\n".join(history_lines) if history_lines else "(none)"
+
+    latest_request = refinement_messages[-1]["content"] if refinement_messages else ""
+
+    user_msg = (
+        f"=== ORIGINAL PLANNING BRIEF ===\n{original_summary or '(not provided)'}\n\n"
+        f"=== CURRENT PROTOCOL JSON ===\n{json.dumps(current_protocol, indent=2)}\n\n"
+        f"=== PRIOR REFINEMENT TURNS ===\n{prior_history}\n\n"
+        f"=== CLINICIAN'S CURRENT CORRECTION REQUEST ===\n{latest_request}\n\n"
+        f"Apply the correction. Return the full updated JSON, then the "
+        f"CHANGES: line, then the NOTE: line, per the system prompt."
+    )
+
+    chunks: list[str] = []
+    async with client.messages.stream(
+        model=model,
+        max_tokens=8192,
+        system=REFINE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+    ) as stream:
+        async for text in stream.text_stream:
+            chunks.append(text)
+
+    raw = "".join(chunks).strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0].strip()
+
+    # The model emits: <JSON object> \n CHANGES: ... \n NOTE: ...
+    # Split off CHANGES: / NOTE: trailers, parse the JSON, keep the rest.
+    note = ""
+    changed: list[str] = []
+    json_text = raw
+
+    note_idx = raw.rfind("\nNOTE:")
+    if note_idx != -1:
+        note = raw[note_idx + len("\nNOTE:"):].strip()
+        json_text = raw[:note_idx].rstrip()
+
+    changes_idx = json_text.rfind("\nCHANGES:")
+    if changes_idx != -1:
+        changes_line = json_text[changes_idx + len("\nCHANGES:"):].strip()
+        changed = [k.strip() for k in changes_line.split(",") if k.strip()]
+        json_text = json_text[:changes_idx].rstrip()
+
+    updated = json.loads(json_text)
+    logger.info(
+        "Protocol refined: %d changed fields (%s)",
+        len(changed), ", ".join(changed) if changed else "none reported",
+    )
+    return updated, note, changed
+
+
 def build_protocol_docx(protocol: dict) -> BytesIO:
     """Build a Word document from a protocol JSON dict. Returns a BytesIO buffer."""
     doc = Document()

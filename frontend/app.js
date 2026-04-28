@@ -152,6 +152,13 @@ const plannerState = {
   messages: [],            // [{role:'user'|'assistant', content:string}]
   lastSummary: "",         // last summarization output, used as protocol query
   currentProtocol: null,
+  // Version tracking for the generated protocol. v1 is the initial generation;
+  // each refinement appends a new version. activeVersion is the index in
+  // protocolVersions whose protocol is currently shown in the preview and
+  // used for downloads.
+  protocolVersions: [],    // [{label, protocol, userRequest, assistantNote, changedFields, timestamp}]
+  activeVersion: -1,
+  refineMessages: [],      // [{role:'user'|'assistant', content:string}] for /protocol/refine
 };
 
 const plannerEls = () => ({
@@ -172,6 +179,16 @@ const plannerEls = () => ({
   protocolPreview: document.getElementById("planner-protocol-preview"),
   downloadBtn: document.getElementById("planner-download-docx-btn"),
   downloadPdfBtn: document.getElementById("planner-download-pdf-btn"),
+  versionList: document.getElementById("planner-version-list"),
+  compareBtn: document.getElementById("planner-compare-btn"),
+  refineThread: document.getElementById("planner-refine-thread"),
+  refineInput: document.getElementById("planner-refine-input"),
+  refineSendBtn: document.getElementById("planner-refine-send-btn"),
+  diffModal: document.getElementById("planner-diff-modal"),
+  diffFrom: document.getElementById("planner-diff-from"),
+  diffTo: document.getElementById("planner-diff-to"),
+  diffBody: document.getElementById("planner-diff-body"),
+  diffCloseBtn: document.getElementById("planner-diff-close-btn"),
 });
 
 function addChatMessage(role, content) {
@@ -308,6 +325,158 @@ function renderLandscapeCard(L) {
   return div;
 }
 
+// ===================== FEEDBACK (thumbs + suggest-correction) =====================
+
+function showToast(message, kind) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = "toast" + (kind === "error" ? " error" : "");
+  toast.textContent = message;
+  container.appendChild(toast);
+  // Trigger transition.
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 250);
+  }, 2400);
+}
+
+async function postFeedback(payload) {
+  const resp = await fetch(`${API_BASE}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+  return await resp.json();
+}
+
+// Snapshot the latest user query + this assistant reply so admins reviewing
+// the feedback queue can see what was being reacted to without correlating
+// timestamps across logs.
+function feedbackContextFor(assistantText) {
+  const lastUser = [...plannerState.messages].reverse().find((m) => m.role === "user");
+  return {
+    query: lastUser ? lastUser.content : "",
+    assistant_message: assistantText || "",
+  };
+}
+
+function attachFeedbackBar(messageDiv, assistantText) {
+  const bar = document.createElement("div");
+  bar.className = "feedback-bar";
+
+  const label = document.createElement("span");
+  label.className = "feedback-bar-label";
+  label.textContent = "Was this helpful?";
+  bar.appendChild(label);
+
+  const upBtn = document.createElement("button");
+  upBtn.type = "button";
+  upBtn.className = "feedback-thumb up";
+  upBtn.textContent = "👍";
+  upBtn.title = "Helpful";
+
+  const downBtn = document.createElement("button");
+  downBtn.type = "button";
+  downBtn.className = "feedback-thumb down";
+  downBtn.textContent = "👎";
+  downBtn.title = "Not helpful";
+
+  bar.appendChild(upBtn);
+  bar.appendChild(downBtn);
+
+  let rated = false;
+  function lockThumbs() {
+    rated = true;
+    upBtn.disabled = true;
+    downBtn.disabled = true;
+  }
+
+  upBtn.addEventListener("click", async () => {
+    if (rated) return;
+    lockThumbs();
+    upBtn.classList.add("selected");
+    try {
+      await postFeedback({
+        type: "rating_up",
+        context: feedbackContextFor(assistantText),
+      });
+      const thanks = document.createElement("span");
+      thanks.className = "feedback-thanks";
+      thanks.textContent = "Thanks!";
+      bar.appendChild(thanks);
+    } catch (err) {
+      showToast(`Failed to send feedback: ${err.message}`, "error");
+      rated = false;
+      upBtn.disabled = false;
+      downBtn.disabled = false;
+      upBtn.classList.remove("selected");
+    }
+  });
+
+  downBtn.addEventListener("click", async () => {
+    if (rated) return;
+    lockThumbs();
+    downBtn.classList.add("selected");
+    // Reveal an optional reason input below the bar. We send the rating
+    // immediately on click; if the user types a reason later we send a
+    // follow-up update (simplest: send as a separate "correction" entry).
+    let initialId = null;
+    try {
+      const resp = await postFeedback({
+        type: "rating_down",
+        context: feedbackContextFor(assistantText),
+      });
+      initialId = resp.id;
+    } catch (err) {
+      showToast(`Failed to send feedback: ${err.message}`, "error");
+      rated = false;
+      upBtn.disabled = false;
+      downBtn.disabled = false;
+      downBtn.classList.remove("selected");
+      return;
+    }
+
+    const reasonWrap = document.createElement("div");
+    reasonWrap.className = "feedback-down-reason";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Optional: what was wrong? (press Enter to send)";
+    reasonWrap.appendChild(input);
+    bar.appendChild(reasonWrap);
+    input.focus();
+
+    input.addEventListener("keydown", async (evt) => {
+      if (evt.key !== "Enter") return;
+      const text = input.value.trim();
+      if (!text) {
+        reasonWrap.remove();
+        return;
+      }
+      input.disabled = true;
+      try {
+        await postFeedback({
+          type: "rating_down",
+          context: feedbackContextFor(assistantText),
+          reason: text,
+        });
+        reasonWrap.remove();
+        const thanks = document.createElement("span");
+        thanks.className = "feedback-thanks";
+        thanks.textContent = "Thanks for the detail!";
+        bar.appendChild(thanks);
+      } catch (err) {
+        showToast(`Failed to send reason: ${err.message}`, "error");
+        input.disabled = false;
+      }
+    });
+  });
+
+  messageDiv.appendChild(bar);
+}
+
 function attachSourcesToMessage(messageDiv, sources) {
   if (!sources || sources.length === 0) return;
   const details = document.createElement("details");
@@ -369,6 +538,9 @@ function resetPlanner() {
   plannerState.messages = [];
   plannerState.lastSummary = "";
   plannerState.currentProtocol = null;
+  plannerState.protocolVersions = [];
+  plannerState.activeVersion = -1;
+  plannerState.refineMessages = [];
   const e = plannerEls();
   e.messagesBox.innerHTML = "";
   e.summarizeBtn.classList.add("hidden");
@@ -376,6 +548,10 @@ function resetPlanner() {
   e.protocolLoading.classList.add("hidden");
   e.protocolResult.classList.add("hidden");
   e.input.value = "";
+  if (e.refineThread) e.refineThread.innerHTML = "";
+  if (e.refineInput) e.refineInput.value = "";
+  if (e.versionList) e.versionList.innerHTML = "";
+  if (e.compareBtn) e.compareBtn.disabled = true;
 }
 
 async function plannerSend() {
@@ -485,6 +661,7 @@ async function plannerSend() {
     plannerState.messages.push({ role: "assistant", content: assistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
     attachChoicesToMessage(assistantDiv, choices);
+    attachFeedbackBar(assistantDiv, assistantText);
     revealPlannerActions();
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
@@ -543,6 +720,18 @@ async function plannerGenerateProtocol() {
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
     plannerState.currentProtocol = data.protocol;
+    plannerState.protocolVersions = [{
+      label: "v1 (original)",
+      protocol: data.protocol,
+      userRequest: null,
+      assistantNote: "Initial generation from the planning brief.",
+      changedFields: [],
+      timestamp: new Date().toISOString(),
+    }];
+    plannerState.activeVersion = 0;
+    plannerState.refineMessages = [];
+    renderVersionBar();
+    if (e.refineThread) e.refineThread.innerHTML = "";
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
   } catch (err) {
@@ -551,6 +740,267 @@ async function plannerGenerateProtocol() {
     e.protocolLoading.classList.add("hidden");
     e.genProtocolBtn.disabled = false;
   }
+}
+
+// ===================== PROTOCOL REFINEMENT =====================
+
+function renderVersionBar() {
+  const e = plannerEls();
+  if (!e.versionList) return;
+  e.versionList.innerHTML = "";
+  plannerState.protocolVersions.forEach((v, idx) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "version-chip" + (idx === plannerState.activeVersion ? " active" : "");
+    const label = document.createElement("span");
+    label.className = "version-chip-label";
+    label.textContent = v.label;
+    chip.appendChild(label);
+    if (v.userRequest) {
+      const note = document.createElement("span");
+      note.className = "version-chip-note";
+      const trimmed = v.userRequest.length > 40
+        ? v.userRequest.slice(0, 40) + "…"
+        : v.userRequest;
+      note.textContent = `· ${trimmed}`;
+      chip.appendChild(note);
+    }
+    chip.title = v.assistantNote || v.userRequest || v.label;
+    chip.addEventListener("click", () => switchToVersion(idx));
+    e.versionList.appendChild(chip);
+  });
+  e.compareBtn.disabled = plannerState.protocolVersions.length < 2;
+}
+
+function switchToVersion(idx) {
+  const versions = plannerState.protocolVersions;
+  if (idx < 0 || idx >= versions.length) return;
+  plannerState.activeVersion = idx;
+  plannerState.currentProtocol = versions[idx].protocol;
+  renderVersionBar();
+  renderProtocolPreview(versions[idx].protocol, "planner-protocol-preview");
+}
+
+function appendRefineMessage(role, content, changedFields) {
+  const e = plannerEls();
+  const div = document.createElement("div");
+  div.className = `refine-msg ${role}`;
+  div.textContent = content;
+  if (role === "assistant" && changedFields && changedFields.length) {
+    const note = document.createElement("div");
+    note.className = "changed-fields";
+    note.textContent = `Changed: ${changedFields.join(", ")}`;
+    div.appendChild(note);
+  }
+  e.refineThread.appendChild(div);
+  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+}
+
+async function plannerSendRefinement() {
+  const e = plannerEls();
+  const text = e.refineInput.value.trim();
+  if (!text || !plannerState.currentProtocol) return;
+
+  appendRefineMessage("user", text);
+  plannerState.refineMessages.push({ role: "user", content: text });
+  e.refineInput.value = "";
+  e.refineSendBtn.disabled = true;
+  e.refineSendBtn.textContent = "Updating...";
+
+  // Show a placeholder assistant bubble that we'll replace once the response lands.
+  const pendingDiv = document.createElement("div");
+  pendingDiv.className = "refine-msg assistant";
+  pendingDiv.textContent = "Updating the protocol...";
+  e.refineThread.appendChild(pendingDiv);
+  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+
+  try {
+    const resp = await fetch(`${API_BASE}/protocol/refine`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol: plannerState.currentProtocol,
+        refinement_messages: plannerState.refineMessages,
+        original_summary: plannerState.lastSummary,
+      }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+
+    // Replace pending bubble with the real assistant note + changed-fields tag.
+    pendingDiv.remove();
+    const note = data.assistant_message
+      || (data.changed_fields && data.changed_fields.length
+            ? `Updated ${data.changed_fields.join(", ")}.`
+            : "Protocol updated.");
+    appendRefineMessage("assistant", note, data.changed_fields || []);
+    plannerState.refineMessages.push({ role: "assistant", content: note });
+
+    // Append a new version and switch to it.
+    const nextNum = plannerState.protocolVersions.length + 1;
+    plannerState.protocolVersions.push({
+      label: `v${nextNum}`,
+      protocol: data.protocol,
+      userRequest: text,
+      assistantNote: note,
+      changedFields: data.changed_fields || [],
+      timestamp: new Date().toISOString(),
+    });
+    plannerState.activeVersion = plannerState.protocolVersions.length - 1;
+    plannerState.currentProtocol = data.protocol;
+    renderVersionBar();
+    renderProtocolPreview(data.protocol, "planner-protocol-preview");
+  } catch (err) {
+    pendingDiv.remove();
+    appendRefineMessage("assistant", `Failed to apply correction: ${err.message}`, []);
+    // Pop the user message off the refine history so retrying doesn't re-send it.
+    plannerState.refineMessages.pop();
+  } finally {
+    e.refineSendBtn.disabled = false;
+    e.refineSendBtn.textContent = "Send correction";
+  }
+}
+
+// ===================== VERSION DIFF =====================
+
+// Fields to consider when computing a diff. We omit administrative placeholders
+// (which the clinician fills in themselves) and keep the order stable so the
+// diff reads top-down like the rendered protocol.
+const DIFF_FIELDS = [
+  "title", "official_title", "phase", "status", "conditions",
+  "summary", "description",
+  "primary_objectives", "secondary_objectives", "exploratory_objectives",
+  "study_design", "study_schema",
+  "intervention_name", "intervention_description", "comparator", "treatment_duration",
+  "inclusion_criteria", "exclusion_criteria",
+  "primary_endpoints", "secondary_endpoints",
+  "estimated_enrollment", "sample_size_justification", "statistical_analysis",
+  "safety_monitoring", "adverse_event_reporting", "dose_modification",
+  "study_assessments", "study_schedule_table",
+  "ethical_considerations", "data_management", "regulatory_considerations",
+  "sex", "minimum_age", "references",
+];
+
+function fieldToString(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (Array.isArray(value)) {
+    return value.map((v) => {
+      if (v && typeof v === "object") {
+        // Schedule rows: { visit, timepoint, procedures }
+        return `• ${v.visit || ""} — ${v.timepoint || ""}: ${v.procedures || ""}`;
+      }
+      return `• ${v}`;
+    }).join("\n");
+  }
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+}
+
+function fieldLabel(key) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function openDiffModal() {
+  const e = plannerEls();
+  if (plannerState.protocolVersions.length < 2) return;
+  // Populate selectors. Default: from = previous version, to = active.
+  const fromIdx = Math.max(0, plannerState.activeVersion - 1);
+  const toIdx = plannerState.activeVersion >= 0
+    ? plannerState.activeVersion
+    : plannerState.protocolVersions.length - 1;
+  populateDiffSelector(e.diffFrom, fromIdx);
+  populateDiffSelector(e.diffTo, toIdx);
+  renderDiff();
+  e.diffModal.classList.remove("hidden");
+}
+
+function closeDiffModal() {
+  plannerEls().diffModal.classList.add("hidden");
+}
+
+function populateDiffSelector(selectEl, selectedIdx) {
+  selectEl.innerHTML = "";
+  plannerState.protocolVersions.forEach((v, idx) => {
+    const opt = document.createElement("option");
+    opt.value = String(idx);
+    opt.textContent = v.userRequest
+      ? `${v.label} — ${v.userRequest.slice(0, 50)}`
+      : v.label;
+    if (idx === selectedIdx) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+}
+
+function renderDiff() {
+  const e = plannerEls();
+  const fromIdx = parseInt(e.diffFrom.value, 10);
+  const toIdx = parseInt(e.diffTo.value, 10);
+  const fromV = plannerState.protocolVersions[fromIdx];
+  const toV = plannerState.protocolVersions[toIdx];
+  e.diffBody.innerHTML = "";
+
+  if (!fromV || !toV) return;
+  if (fromIdx === toIdx) {
+    e.diffBody.innerHTML = `<div class="diff-empty-state">Same version selected on both sides — pick two different versions to compare.</div>`;
+    return;
+  }
+
+  const diffs = [];
+  DIFF_FIELDS.forEach((key) => {
+    const oldStr = fieldToString(fromV.protocol[key]);
+    const newStr = fieldToString(toV.protocol[key]);
+    if (oldStr !== newStr) diffs.push({ key, oldStr, newStr });
+  });
+
+  if (diffs.length === 0) {
+    e.diffBody.innerHTML = `<div class="diff-empty-state">No differences detected between ${escapeHtml(fromV.label)} and ${escapeHtml(toV.label)}.</div>`;
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.style.marginBottom = "12px";
+  header.style.fontSize = "12px";
+  header.style.color = "var(--text-secondary)";
+  header.textContent = `${diffs.length} field${diffs.length === 1 ? "" : "s"} changed between ${fromV.label} and ${toV.label}.`;
+  e.diffBody.appendChild(header);
+
+  diffs.forEach((d) => {
+    const section = document.createElement("div");
+    section.className = "diff-section";
+
+    const title = document.createElement("div");
+    title.className = "diff-section-title";
+    title.textContent = fieldLabel(d.key);
+    section.appendChild(title);
+
+    const cols = document.createElement("div");
+    cols.className = "diff-cols";
+
+    const oldCol = document.createElement("div");
+    oldCol.className = "diff-col old" + (d.oldStr ? "" : " empty");
+    const oldHeader = document.createElement("div");
+    oldHeader.className = "diff-col-header";
+    oldHeader.textContent = `${fromV.label} (before)`;
+    oldCol.appendChild(oldHeader);
+    const oldBody = document.createElement("div");
+    oldBody.textContent = d.oldStr || "(empty)";
+    oldCol.appendChild(oldBody);
+
+    const newCol = document.createElement("div");
+    newCol.className = "diff-col new" + (d.newStr ? "" : " empty");
+    const newHeader = document.createElement("div");
+    newHeader.className = "diff-col-header";
+    newHeader.textContent = `${toV.label} (after)`;
+    newCol.appendChild(newHeader);
+    const newBody = document.createElement("div");
+    newBody.textContent = d.newStr || "(empty)";
+    newCol.appendChild(newBody);
+
+    cols.appendChild(oldCol);
+    cols.appendChild(newCol);
+    section.appendChild(cols);
+    e.diffBody.appendChild(section);
+  });
 }
 
 // Download the current protocol in the given format ("docx" or "pdf").
@@ -584,6 +1034,276 @@ async function plannerDownloadProtocolAs(format) {
   }
 }
 
+// ===================== ADMIN FEEDBACK REVIEW =====================
+
+const adminEls = () => ({
+  panel: document.getElementById("admin-panel"),
+  stats: document.getElementById("admin-panel-stats"),
+  refreshBtn: document.getElementById("admin-refresh-btn"),
+  closeBtn: document.getElementById("admin-close-btn"),
+  aliasesBox: document.getElementById("admin-aliases"),
+  feedbackList: document.getElementById("admin-feedback-list"),
+});
+
+function adminRenderStats(stats) {
+  const e = adminEls();
+  e.stats.innerHTML = `
+    <span class="admin-stat">👍 ${stats.rating_up || 0}</span>
+    <span class="admin-stat">👎 ${stats.rating_down || 0}</span>
+    <span class="admin-stat">Open corrections: ${stats.open_corrections || 0}</span>
+    <span class="admin-stat">Total entries: ${stats.total || 0}</span>
+  `;
+}
+
+function adminRenderAliases(aliases) {
+  const e = adminEls();
+  e.aliasesBox.innerHTML = "";
+  const entries = Object.entries(aliases || {});
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "admin-alias-empty";
+    empty.textContent = "No aliases promoted yet. Promote a 'Missing drug alias' correction below to populate this dictionary.";
+    e.aliasesBox.appendChild(empty);
+    return;
+  }
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  entries.forEach(([alias, canonical]) => {
+    const row = document.createElement("div");
+    row.className = "admin-alias-row";
+    const aliasEl = document.createElement("strong");
+    aliasEl.textContent = alias;
+    row.appendChild(aliasEl);
+    row.appendChild(document.createTextNode(` → ${canonical}`));
+    e.aliasesBox.appendChild(row);
+  });
+}
+
+function adminRenderFeedbackRow(entry) {
+  const row = document.createElement("div");
+  row.className = `admin-feedback-row ${entry.status || "open"}`;
+
+  const meta = document.createElement("div");
+  meta.className = "admin-feedback-meta";
+  const typeChip = document.createElement("span");
+  typeChip.className = `admin-feedback-type ${(entry.type || "").replace(/_/g, "-")}`;
+  typeChip.textContent = (entry.type || "unknown").replace(/_/g, " ");
+  meta.appendChild(typeChip);
+  const statusChip = document.createElement("span");
+  statusChip.className = "admin-feedback-status";
+  statusChip.textContent = entry.status || "open";
+  meta.appendChild(statusChip);
+  const ts = document.createElement("span");
+  const d = entry.created_at ? new Date(entry.created_at) : null;
+  ts.textContent = d && !isNaN(d) ? d.toLocaleString() : (entry.created_at || "");
+  meta.appendChild(ts);
+  const id = document.createElement("span");
+  id.textContent = `id: ${(entry.id || "").slice(0, 8)}…`;
+  id.style.fontFamily = "monospace";
+  meta.appendChild(id);
+  row.appendChild(meta);
+
+  const body = document.createElement("div");
+  body.className = "admin-feedback-body";
+  if (entry.type === "correction") {
+    if (entry.correction_kind === "missing_alias") {
+      body.innerHTML = `
+        <div><span class="field-label">Alias:</span> <strong>${escapeHtml(entry.alias || "")}</strong></div>
+        <div><span class="field-label">Canonical:</span> <strong>${escapeHtml(entry.canonical || "")}</strong></div>
+      `;
+    } else {
+      body.innerHTML = `<div><span class="field-label">Kind:</span> ${escapeHtml(entry.correction_kind || "")}</div>`;
+    }
+    if (entry.notes) {
+      const notes = document.createElement("div");
+      notes.innerHTML = `<span class="field-label">Notes:</span> ${escapeHtml(entry.notes)}`;
+      body.appendChild(notes);
+    }
+  } else if (entry.type === "rating_down" && entry.reason) {
+    body.innerHTML = `<span class="field-label">Reason:</span> ${escapeHtml(entry.reason)}`;
+  } else if (entry.type === "rating_up") {
+    body.innerHTML = `<em>Thumbs up — no additional context.</em>`;
+  } else if (entry.type === "rating_down") {
+    body.innerHTML = `<em>Thumbs down — no reason provided.</em>`;
+  }
+  row.appendChild(body);
+
+  if (entry.context && (entry.context.query || entry.context.assistant_message)) {
+    const ctx = document.createElement("div");
+    ctx.className = "admin-feedback-context";
+    const det = document.createElement("details");
+    const sum = document.createElement("summary");
+    sum.textContent = "Conversation context";
+    det.appendChild(sum);
+    if (entry.context.query) {
+      const q = document.createElement("div");
+      q.innerHTML = `<span class="field-label">Query:</span> ${escapeHtml(entry.context.query)}`;
+      det.appendChild(q);
+    }
+    if (entry.context.assistant_message) {
+      const a = document.createElement("div");
+      a.style.marginTop = "4px";
+      a.innerHTML = `<span class="field-label">Reply:</span> ${escapeHtml(entry.context.assistant_message)}`;
+      det.appendChild(a);
+    }
+    ctx.appendChild(det);
+    row.appendChild(ctx);
+  }
+
+  if ((entry.status || "open") === "open") {
+    const actions = document.createElement("div");
+    actions.className = "admin-feedback-actions";
+
+    if (entry.type === "correction" && entry.correction_kind === "missing_alias") {
+      const aliasInput = document.createElement("input");
+      aliasInput.type = "text";
+      aliasInput.value = entry.alias || "";
+      aliasInput.placeholder = "alias";
+      const canonicalInput = document.createElement("input");
+      canonicalInput.type = "text";
+      canonicalInput.value = entry.canonical || "";
+      canonicalInput.placeholder = "canonical name";
+      const promoteBtn = document.createElement("button");
+      promoteBtn.className = "primary-btn";
+      promoteBtn.textContent = "Promote to dictionary";
+      promoteBtn.addEventListener("click", async () => {
+        const alias = aliasInput.value.trim();
+        const canonical = canonicalInput.value.trim();
+        if (!alias || !canonical) {
+          showToast("Both alias and canonical name are required.", "error");
+          return;
+        }
+        promoteBtn.disabled = true;
+        promoteBtn.textContent = "Promoting...";
+        try {
+          const resp = await fetch(`${API_BASE}/feedback/promote`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ feedback_id: entry.id, alias, canonical }),
+          });
+          if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+          showToast(`Promoted: ${alias} → ${canonical}`);
+          adminLoad();
+        } catch (err) {
+          showToast(`Failed: ${err.message}`, "error");
+          promoteBtn.disabled = false;
+          promoteBtn.textContent = "Promote to dictionary";
+        }
+      });
+      actions.appendChild(aliasInput);
+      actions.appendChild(canonicalInput);
+      actions.appendChild(promoteBtn);
+    }
+
+    const resolveBtn = document.createElement("button");
+    resolveBtn.className = "secondary-btn";
+    resolveBtn.textContent = "Mark resolved";
+    resolveBtn.addEventListener("click", () => adminUpdateStatus(entry.id, "resolved"));
+    const dismissBtn = document.createElement("button");
+    dismissBtn.className = "secondary-btn";
+    dismissBtn.textContent = "Dismiss";
+    dismissBtn.addEventListener("click", () => adminUpdateStatus(entry.id, "dismissed"));
+    actions.appendChild(resolveBtn);
+    actions.appendChild(dismissBtn);
+
+    row.appendChild(actions);
+  }
+
+  return row;
+}
+
+async function adminUpdateStatus(id, status) {
+  try {
+    const resp = await fetch(`${API_BASE}/feedback/${id}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    showToast(`Marked ${status}.`);
+    adminLoad();
+  } catch (err) {
+    showToast(`Failed: ${err.message}`, "error");
+  }
+}
+
+async function adminLoad() {
+  const e = adminEls();
+  e.feedbackList.textContent = "Loading...";
+  try {
+    const [feedbackResp, aliasesResp] = await Promise.all([
+      fetch(`${API_BASE}/feedback`),
+      fetch(`${API_BASE}/aliases`),
+    ]);
+    if (!feedbackResp.ok) throw new Error(`/feedback ${feedbackResp.status}`);
+    if (!aliasesResp.ok) throw new Error(`/aliases ${aliasesResp.status}`);
+    const fb = await feedbackResp.json();
+    const al = await aliasesResp.json();
+
+    adminRenderStats(fb.stats || {});
+    adminRenderAliases(al.aliases || {});
+
+    e.feedbackList.innerHTML = "";
+    const entries = fb.entries || [];
+    if (entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "admin-feedback-empty";
+      empty.textContent = "No feedback yet. Once users rate replies or submit corrections, they'll appear here.";
+      e.feedbackList.appendChild(empty);
+      return;
+    }
+    entries.forEach((entry) => {
+      e.feedbackList.appendChild(adminRenderFeedbackRow(entry));
+    });
+  } catch (err) {
+    e.feedbackList.innerHTML = `<div class="admin-feedback-empty">Failed to load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function showAdminPanel() {
+  const e = adminEls();
+  if (!e.panel) return;
+  e.panel.classList.remove("hidden");
+  e.panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  adminLoad();
+}
+
+function hideAdminPanel() {
+  const e = adminEls();
+  if (!e.panel) return;
+  e.panel.classList.add("hidden");
+}
+
+function adminInit() {
+  const e = adminEls();
+  if (!e.panel) return;
+
+  // Wire close + refresh once. The panel itself is shown either by a click
+  // on the footer link or by an ?admin=1 URL flag at load time.
+  e.refreshBtn.addEventListener("click", adminLoad);
+  e.closeBtn.addEventListener("click", hideAdminPanel);
+
+  // Footer "Admin" link: toggle in-place rather than navigating, so it works
+  // under file://, http://, or any other scheme.
+  const adminLink = document.getElementById("admin-link");
+  if (adminLink) {
+    adminLink.addEventListener("click", (evt) => {
+      evt.preventDefault();
+      if (e.panel.classList.contains("hidden")) {
+        showAdminPanel();
+      } else {
+        hideAdminPanel();
+      }
+    });
+  }
+
+  // Optional: still honor ?admin=1 in the URL on first load so a bookmarked
+  // link drops the user straight into the admin view.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("admin") === "1") {
+    showAdminPanel();
+  }
+}
+
 // Wire up planner event listeners
 (function initPlanner() {
   const e = plannerEls();
@@ -604,4 +1324,28 @@ async function plannerDownloadProtocolAs(format) {
       plannerSend();
     }
   });
+
+  // Refinement panel + version controls
+  if (e.refineSendBtn) {
+    e.refineSendBtn.addEventListener("click", plannerSendRefinement);
+  }
+  if (e.refineInput) {
+    e.refineInput.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" && !evt.shiftKey) {
+        evt.preventDefault();
+        plannerSendRefinement();
+      }
+    });
+  }
+  if (e.compareBtn) e.compareBtn.addEventListener("click", openDiffModal);
+  if (e.diffCloseBtn) e.diffCloseBtn.addEventListener("click", closeDiffModal);
+  if (e.diffModal) {
+    e.diffModal.querySelector(".diff-modal-backdrop")
+      ?.addEventListener("click", closeDiffModal);
+  }
+  if (e.diffFrom) e.diffFrom.addEventListener("change", renderDiff);
+  if (e.diffTo) e.diffTo.addEventListener("change", renderDiff);
+
+  // Initialize the admin panel if ?admin=1 is in the URL.
+  adminInit();
 })();

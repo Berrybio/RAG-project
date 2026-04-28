@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=14">
+    <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
     <header>
@@ -55,19 +55,80 @@
             </div>
 
             <div id="planner-protocol-result" class="hidden">
+                <div id="planner-version-bar" class="version-bar">
+                    <span class="version-bar-label">Versions:</span>
+                    <div id="planner-version-list" class="version-list"></div>
+                    <button id="planner-compare-btn" class="secondary-btn version-compare-btn" disabled>Compare versions</button>
+                </div>
+
                 <div class="protocol-actions">
                     <button id="planner-download-docx-btn" class="primary-btn">Download as Word</button>
                     <button id="planner-download-pdf-btn" class="secondary-btn">Download as PDF</button>
                 </div>
                 <div id="planner-protocol-preview"></div>
+
+                <div id="planner-refine-section" class="refine-section">
+                    <h3>Refine the report</h3>
+                    <p class="refine-intro">
+                        Spotted something wrong? Tell the assistant what to correct
+                        (e.g. <em>"the control arm should be pembrolizumab monotherapy, not chemotherapy"</em>)
+                        and it will update the protocol. Each correction creates a new version you can compare against.
+                    </p>
+                    <div id="planner-refine-thread" class="refine-thread"></div>
+                    <div class="input-group">
+                        <textarea id="planner-refine-input" placeholder="Describe the correction..." rows="2"></textarea>
+                        <div class="controls">
+                            <button id="planner-refine-send-btn" class="primary-btn">Send correction</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Compare-versions modal -->
+            <div id="planner-diff-modal" class="diff-modal hidden">
+                <div class="diff-modal-backdrop"></div>
+                <div class="diff-modal-panel">
+                    <div class="diff-modal-header">
+                        <h3>Compare versions</h3>
+                        <div class="diff-version-pickers">
+                            <label>From: <select id="planner-diff-from"></select></label>
+                            <label>To: <select id="planner-diff-to"></select></label>
+                        </div>
+                        <button id="planner-diff-close-btn" class="secondary-btn">Close</button>
+                    </div>
+                    <div id="planner-diff-body" class="diff-body"></div>
+                </div>
             </div>
         </section>
     </main>
 
+    <!-- Admin feedback review panel — only shown when URL has ?admin=1 -->
+    <section id="admin-panel" class="admin-panel hidden">
+        <div class="admin-panel-header">
+            <h2>Feedback review</h2>
+            <div class="admin-panel-stats" id="admin-panel-stats"></div>
+            <button id="admin-refresh-btn" class="secondary-btn">Refresh</button>
+            <button id="admin-close-btn" class="secondary-btn">Close</button>
+        </div>
+        <div class="admin-panel-body">
+            <div class="admin-section">
+                <h3>Current drug-alias dictionary</h3>
+                <div id="admin-aliases" class="admin-aliases">Loading...</div>
+            </div>
+            <div class="admin-section">
+                <h3>Feedback queue</h3>
+                <div id="admin-feedback-list" class="admin-feedback-list">Loading...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Toast for feedback confirmations -->
+    <div id="toast-container" class="toast-container"></div>
+
     <footer>
-        <p>Powered by Claude &middot; Data from ClinicalTrials.gov</p>
+        <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=14"></script>
+    <script src="app.js?v=18"></script>
 </body>
 </html>

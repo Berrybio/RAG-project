@@ -2,9 +2,21 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from ..dependencies import get_pipeline, get_client
-from ..models.schemas import ProtocolRequest, ProtocolResponse, DocxRequest, SourceDoc
+from ..models.schemas import (
+    ProtocolRequest,
+    ProtocolResponse,
+    DocxRequest,
+    SourceDoc,
+    RefineProtocolRequest,
+    RefineProtocolResponse,
+)
 from ..core.pipeline import ClinicalTrialRAG
-from ..core.protocol import generate_protocol_json, build_protocol_docx, build_protocol_pdf
+from ..core.protocol import (
+    generate_protocol_json,
+    refine_protocol_json,
+    build_protocol_docx,
+    build_protocol_pdf,
+)
 from ..api.search import _to_source_doc
 
 import anthropic
@@ -32,6 +44,27 @@ def _protocol_filename(protocol: dict, extension: str) -> str:
     """Build a safe filename, falling back to 'protocol' when protocol_id is empty."""
     stem = (protocol.get("protocol_id") or "").strip() or "protocol"
     return f"{stem}.{extension}"
+
+
+@router.post("/protocol/refine", response_model=RefineProtocolResponse)
+async def refine_protocol(
+    body: RefineProtocolRequest,
+    client: anthropic.AsyncAnthropic = Depends(get_client),
+    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+):
+    """Apply a clinician's correction request to an existing protocol JSON."""
+    updated, note, changed = await refine_protocol_json(
+        client,
+        current_protocol=body.protocol,
+        refinement_messages=[m.model_dump() for m in body.refinement_messages],
+        original_summary=body.original_summary,
+        model=pipeline.model,
+    )
+    return RefineProtocolResponse(
+        protocol=updated,
+        assistant_message=note,
+        changed_fields=changed,
+    )
 
 
 @router.post("/protocol/docx")

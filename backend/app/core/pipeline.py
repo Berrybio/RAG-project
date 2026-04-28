@@ -5,6 +5,7 @@ import anthropic
 
 from .data import build_documents, load_clinical_trials
 from .generation import generate_answer, generate_answer_stream
+from .landscape import classify_trial
 from .retriever import TFIDFRetriever, VoyageRetriever
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,257 @@ def _doc_matches_statuses(doc: dict, statuses: list[str]) -> bool:
     return value in statuses
 
 
+# ---- Sponsor filter ----
+#
+# Dense retrieval doesn't rank reliably on sponsor identity, so a query like
+# "AstraZeneca's ADC trials for TNBC" can return academic / Chinese-university
+# sponsored trials whose text matches "ADC trials for TNBC" more strongly. We
+# detect named pharma sponsors in the query and post-filter retrieved docs
+# against `sponsorName`.
+#
+# The dict maps natural-language aliases (lowercased, what users type) to a
+# substring that should appear in the doc's sponsorName field. Substring
+# match — not equality — so "astrazeneca" matches both "AstraZeneca" and any
+# regional sub-entity (e.g. "AstraZeneca AB"). One canonical group per
+# alias; "msd" and "merck" both collapse to "merck" so either spelling
+# pulls Merck-sponsored trials.
+
+_SPONSOR_ALIASES: dict[str, str] = {
+    "astrazeneca": "astrazeneca",
+    "merck": "merck",
+    "msd": "merck",
+    "pfizer": "pfizer",
+    "roche": "roche",
+    "hoffmann-la roche": "roche",
+    "genentech": "genentech",
+    "novartis": "novartis",
+    "eli lilly": "lilly",
+    "lilly": "lilly",
+    "janssen": "janssen",
+    "johnson & johnson": "janssen",
+    "j&j": "janssen",
+    "gsk": "glaxosmithkline",
+    "glaxosmithkline": "glaxosmithkline",
+    "gilead": "gilead",
+    "bristol-myers squibb": "bristol",
+    "bristol myers squibb": "bristol",
+    "bms": "bristol",
+    "daiichi sankyo": "daiichi sankyo",
+    "daiichi": "daiichi sankyo",
+    "sanofi": "sanofi",
+    "bayer": "bayer",
+    "takeda": "takeda",
+    "abbvie": "abbvie",
+    "amgen": "amgen",
+    "regeneron": "regeneron",
+    "seagen": "seagen",
+    "seattle genetics": "seagen",
+    "incyte": "incyte",
+    "moderna": "moderna",
+    "biontech": "biontech",
+}
+
+
+def _extract_sponsors(query: str) -> list[str]:
+    """Return canonical sponsor substrings implied by the query.
+
+    Uses whole-word match on aliases, longest-first, so 'bristol myers squibb'
+    wins over 'bristol' inside it.
+    """
+    q = query.lower()
+    found: list[str] = []
+    for alias in sorted(_SPONSOR_ALIASES, key=len, reverse=True):
+        # `\b` doesn't match well around symbols (& and -). For aliases that
+        # contain those, we fall back to plain substring on the lowered query.
+        if re.search(rf"[a-z0-9_]", alias) is None:
+            continue
+        if any(c in alias for c in "&-"):
+            if alias in q:
+                canonical = _SPONSOR_ALIASES[alias]
+                if canonical not in found:
+                    found.append(canonical)
+                q = q.replace(alias, " ")
+            continue
+        if re.search(rf"\b{re.escape(alias)}\b", q):
+            canonical = _SPONSOR_ALIASES[alias]
+            if canonical not in found:
+                found.append(canonical)
+            q = re.sub(rf"\b{re.escape(alias)}\b", " ", q)
+    return found
+
+
+def _doc_matches_sponsors(doc: dict, sponsors: list[str]) -> bool:
+    """True if doc's sponsorName contains any of the requested substrings."""
+    haystack = (doc.get("metadata", {}).get("sponsorName") or "").lower()
+    return any(s in haystack for s in sponsors)
+
+
+# ---- Drug-class filter ----
+#
+# Queries like "ADC + checkpoint inhibitor combinations" name drug *categories*
+# rather than specific drugs. Voyage embeddings rank trials whose text uses
+# the category word verbatim (e.g. Chinese-sponsored studies that say "ADC")
+# higher than trials that only mention the underlying drug names (Dato-DXd,
+# Durvalumab). This systematically hides the major-pharma trials that *are*
+# the canonical examples of those classes.
+#
+# Two-pronged fix when the query mentions a drug class:
+#   1. Expand the retrieval query with representative drug names from that
+#      class so dense retrieval finds them.
+#   2. Post-filter the retrieved pool to require trials to have ALL the
+#      requested classes (so "ADC + checkpoint" returns trials that have
+#      BOTH, not just one). Falls back to ANY-match if intersection is empty.
+
+# Aliases the user might type in a query → the canonical class label used by
+# `classify_trial` (defined in landscape.py). Match is whole-token / lenient
+# on punctuation, longest-first.
+_DRUG_CLASS_QUERY_ALIASES: dict[str, str] = {
+    # ADC
+    "adc": "ADC (antibody-drug conjugate)",
+    "adcs": "ADC (antibody-drug conjugate)",
+    "antibody-drug conjugate": "ADC (antibody-drug conjugate)",
+    "antibody drug conjugate": "ADC (antibody-drug conjugate)",
+    "antibody-drug conjugates": "ADC (antibody-drug conjugate)",
+    "antibody drug conjugates": "ADC (antibody-drug conjugate)",
+    # PD-(L)1 / checkpoint
+    "checkpoint inhibitor": "PD-(L)1 / immune checkpoint",
+    "checkpoint inhibitors": "PD-(L)1 / immune checkpoint",
+    "immune checkpoint": "PD-(L)1 / immune checkpoint",
+    "immune checkpoint inhibitor": "PD-(L)1 / immune checkpoint",
+    "ici": "PD-(L)1 / immune checkpoint",
+    "pd-1 inhibitor": "PD-(L)1 / immune checkpoint",
+    "pd-l1 inhibitor": "PD-(L)1 / immune checkpoint",
+    "pd1 inhibitor": "PD-(L)1 / immune checkpoint",
+    "pdl1 inhibitor": "PD-(L)1 / immune checkpoint",
+    "pd-1": "PD-(L)1 / immune checkpoint",
+    "pd-l1": "PD-(L)1 / immune checkpoint",
+    "anti-pd-1": "PD-(L)1 / immune checkpoint",
+    "anti-pd-l1": "PD-(L)1 / immune checkpoint",
+    # PARP
+    "parp inhibitor": "PARP inhibitor",
+    "parp inhibitors": "PARP inhibitor",
+    "parpi": "PARP inhibitor",
+    # CDK4/6
+    "cdk4/6 inhibitor": "CDK4/6 inhibitor",
+    "cdk4/6": "CDK4/6 inhibitor",
+    "cdk inhibitor": "CDK4/6 inhibitor",
+    # HER2
+    "her2-targeted therapy": "HER2-targeted therapy",
+    "her2-targeted": "HER2-targeted therapy",
+    "her2 targeted": "HER2-targeted therapy",
+    "anti-her2": "HER2-targeted therapy",
+    # AKT/PI3K/mTOR
+    "pi3k inhibitor": "AKT / PI3K / mTOR inhibitor",
+    "akt inhibitor": "AKT / PI3K / mTOR inhibitor",
+    "mtor inhibitor": "AKT / PI3K / mTOR inhibitor",
+    # SERD / endocrine
+    "serd": "Endocrine / SERD / aromatase",
+    "endocrine therapy": "Endocrine / SERD / aromatase",
+    "aromatase inhibitor": "Endocrine / SERD / aromatase",
+    # AR
+    "ar inhibitor": "AR-directed (LAR-TNBC)",
+    "androgen receptor inhibitor": "AR-directed (LAR-TNBC)",
+    # VEGF / anti-angiogenic
+    "vegf inhibitor": "VEGF / anti-angiogenic",
+    "anti-angiogenic": "VEGF / anti-angiogenic",
+    "anti angiogenic": "VEGF / anti-angiogenic",
+    # Chemo categories
+    "taxane": "Taxane chemotherapy",
+    "taxanes": "Taxane chemotherapy",
+    "platinum": "Platinum chemotherapy",
+    "platinum chemotherapy": "Platinum chemotherapy",
+    "anthracycline": "Anthracycline chemotherapy",
+    "anthracyclines": "Anthracycline chemotherapy",
+}
+
+# Synonyms used to expand the retrieval query when a class is detected.
+# Picked to be the highest-recognition specific drug names in the corpus —
+# enough to give Voyage embeddings something concrete to anchor on without
+# diluting the query into incoherence. Limit per class is small.
+_DRUG_CLASS_EXPANSION: dict[str, list[str]] = {
+    "ADC (antibody-drug conjugate)": [
+        "Datopotamab deruxtecan", "Trastuzumab deruxtecan",
+        "Sacituzumab govitecan", "Dato-DXd", "T-DXd",
+    ],
+    "PD-(L)1 / immune checkpoint": [
+        "Pembrolizumab", "Atezolizumab", "Durvalumab", "Nivolumab",
+    ],
+    "PARP inhibitor": ["Olaparib", "Talazoparib", "Niraparib"],
+    "CDK4/6 inhibitor": ["Palbociclib", "Ribociclib", "Abemaciclib"],
+    "HER2-targeted therapy": ["Trastuzumab", "Pertuzumab", "Tucatinib"],
+    "AKT / PI3K / mTOR inhibitor": ["Capivasertib", "Alpelisib", "Inavolisib"],
+    "Endocrine / SERD / aromatase": ["Fulvestrant", "Elacestrant", "Letrozole"],
+    "AR-directed (LAR-TNBC)": ["Enzalutamide", "Bicalutamide"],
+    "VEGF / anti-angiogenic": ["Bevacizumab", "Apatinib", "Anlotinib"],
+    "Taxane chemotherapy": ["Paclitaxel", "Nab-paclitaxel", "Docetaxel"],
+    "Platinum chemotherapy": ["Carboplatin", "Cisplatin"],
+    "Anthracycline chemotherapy": ["Doxorubicin", "Epirubicin"],
+}
+
+
+def _extract_drug_classes(query: str) -> list[str]:
+    """Return canonical drug-class labels mentioned in the query.
+
+    Handles aliases with `/`, `-`, and other punctuation by checking lenient
+    boundaries (start/end of token, not strict `\b` regex).
+    """
+    q = " " + query.lower() + " "
+    found: list[str] = []
+    consumed = q
+    # Longest first so "cdk4/6 inhibitor" wins over "cdk4/6", etc.
+    for alias in sorted(_DRUG_CLASS_QUERY_ALIASES, key=len, reverse=True):
+        # Build a lenient boundary: alias must be preceded and followed by a
+        # non-alphanumeric character (or string edge). This handles "ADC +"
+        # and "ADC," correctly without false-matching inside "advance".
+        pattern = re.compile(
+            rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])",
+            re.IGNORECASE,
+        )
+        if pattern.search(consumed):
+            label = _DRUG_CLASS_QUERY_ALIASES[alias]
+            if label not in found:
+                found.append(label)
+            consumed = pattern.sub(" ", consumed)
+    return found
+
+
+def _expand_query_with_drug_classes(query: str, classes: list[str]) -> str:
+    """Append representative drug names from each class to the retrieval query.
+
+    The original query is preserved verbatim; expansions are appended so the
+    embedder sees the user's wording first and concrete drug names as
+    additional anchors. Skip drugs whose names already appear in the query
+    to keep the expansion compact.
+    """
+    if not classes:
+        return query
+    qlow = query.lower()
+    extras: list[str] = []
+    for cls in classes:
+        for drug in _DRUG_CLASS_EXPANSION.get(cls, []):
+            if drug.lower() not in qlow and drug not in extras:
+                extras.append(drug)
+    if not extras:
+        return query
+    return query + " " + " ".join(extras)
+
+
+def _doc_matches_drug_classes(doc: dict, target_classes: list[str], require_all: bool) -> bool:
+    """True if doc's classified drug classes overlap with the target list.
+
+    `require_all=True` enforces an intersection (e.g. "ADC + checkpoint" returns
+    only trials with BOTH classes); `False` accepts any-match (used as a
+    fallback when intersection is empty).
+    """
+    if not target_classes:
+        return True
+    doc_classes = set(classify_trial(doc))
+    target = set(target_classes)
+    if require_all:
+        return target.issubset(doc_classes)
+    return bool(doc_classes & target)
+
+
 # ---- Treatment-setting filter (adjuvant / neoadjuvant / metastatic) ----
 #
 # Breast cancer trials fall into distinct clinical settings:
@@ -288,15 +540,24 @@ class ClinicalTrialRAG:
         setting = _extract_setting_intent(query)
         study_type = _extract_study_type(query)
         statuses = _extract_statuses(query)
+        sponsors = _extract_sponsors(query)
+        drug_classes = _extract_drug_classes(query)
 
-        if not any([countries, states, setting, study_type, statuses]):
+        if not any([countries, states, setting, study_type, statuses, sponsors, drug_classes]):
             return self.retriever.retrieve(query, top_k=top_k)
 
-        # Overfetch more aggressively when filters are strict so top_k can be filled.
-        # Filters on sparse attributes (e.g. OBSERVATIONAL + RECRUITING) can reject
-        # the vast majority of a small pool.
-        pool_size = max(top_k * 20, 200) if (study_type or statuses) else max(top_k * 10, 50)
-        pool = self.retriever.retrieve(query, top_k=pool_size)
+        # Drug-class filters need both expansion (so dense retrieval finds the
+        # specific drugs) and an aggressive pool — required-intersection
+        # filtering on multiple classes is the strictest filter we apply.
+        if study_type or statuses or sponsors or drug_classes:
+            pool_size = max(top_k * 20, 200)
+        else:
+            pool_size = max(top_k * 10, 50)
+
+        # Expand the retrieval query with canonical drug names from any
+        # detected classes so the embedder sees concrete anchors.
+        retrieval_query = _expand_query_with_drug_classes(query, drug_classes)
+        pool = self.retriever.retrieve(retrieval_query, top_k=pool_size)
         filtered = pool
         if countries:
             filtered = [d for d in filtered if _doc_matches_countries(d, countries)]
@@ -308,10 +569,22 @@ class ClinicalTrialRAG:
             filtered = [d for d in filtered if _doc_matches_study_type(d, study_type)]
         if statuses:
             filtered = [d for d in filtered if _doc_matches_statuses(d, statuses)]
+        if sponsors:
+            filtered = [d for d in filtered if _doc_matches_sponsors(d, sponsors)]
+        if drug_classes:
+            # Strict pass: trials must match ALL requested classes (intersection).
+            strict = [d for d in filtered if _doc_matches_drug_classes(d, drug_classes, require_all=True)]
+            if strict:
+                filtered = strict
+            else:
+                # Fallback: any class match. Better than dropping the filter.
+                lenient = [d for d in filtered if _doc_matches_drug_classes(d, drug_classes, require_all=False)]
+                filtered = lenient or filtered
 
         filter_summary = (
             f"countries={countries} states={states} setting={setting} "
-            f"studyType={study_type} statuses={statuses}"
+            f"studyType={study_type} statuses={statuses} sponsors={sponsors} "
+            f"drugClasses={drug_classes}"
         )
         if not filtered:
             logger.info("Filter (%s) matched 0 trials — falling back to unfiltered results", filter_summary)

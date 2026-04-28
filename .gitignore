@@ -26,6 +26,9 @@ Thumbs.db
 # Data (mounted at runtime)
 backend/data/*.csv
 backend/data/embeddings_cache/
+# Runtime feedback log + curated alias dictionary (per-deployment, not source)
+backend/data/user_feedback.jsonl
+backend/data/drug_aliases.json
 
 # Generated outputs
 *.docx
