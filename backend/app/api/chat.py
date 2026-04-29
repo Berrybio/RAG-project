@@ -1,5 +1,6 @@
 """Multi-turn chat endpoint for clinician-facing trial planning."""
 import json
+import time
 from typing import Literal
 
 import anthropic
@@ -7,7 +8,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..dependencies import get_aliases, get_pipeline, get_client
+from ..core.analytics import log_event
+from ..dependencies import get_aliases, get_identity, get_pipeline, get_client
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
@@ -57,12 +59,22 @@ async def chat_stream(
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
     client: anthropic.AsyncAnthropic = Depends(get_client),
     aliases: dict = Depends(get_aliases),
+    identity: dict = Depends(get_identity),
 ):
+    started = time.monotonic()
     if body.messages[-1].role != "user":
         return {"error": "Last message must be from user"}
 
     latest_query = body.messages[-1].content
     history = [m.model_dump() for m in body.messages]
+    turn_number = sum(1 for m in body.messages if m.role == "user")
+    log_event(
+        "chat_message",
+        turn_number=turn_number,
+        query_text=latest_query,
+        include_landscape=body.include_landscape,
+        **identity,
+    )
 
     # Carry filter context across turns. If the population (e.g. TNBC) was
     # established earlier but the current turn says only "phase II", the
@@ -125,6 +137,16 @@ async def chat_stream(
         compute_landscape(pipeline.documents, merged_filters)
         if merged_filters and body.include_landscape
         else None
+    )
+
+    log_event(
+        "query_received",
+        endpoint="chat_stream",
+        query_text=latest_query,
+        num_sources=len(retrieved),
+        landscape_emitted=bool(landscape and merged_filters != prior_filters),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        **identity,
     )
 
     async def event_generator():

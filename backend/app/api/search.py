@@ -1,9 +1,12 @@
 import json
+import time
 
 from fastapi import APIRouter, Depends, Query
+
 from fastapi.responses import StreamingResponse
 
-from ..dependencies import get_pipeline
+from ..core.analytics import log_event
+from ..dependencies import get_identity, get_pipeline
 from ..models.schemas import SearchRequest, SearchResponse, SourceDoc
 from ..core.pipeline import ClinicalTrialRAG
 
@@ -59,8 +62,18 @@ def _to_source_doc(doc: dict) -> SourceDoc:
 async def search_trials(
     body: SearchRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    identity: dict = Depends(get_identity),
 ):
+    started = time.monotonic()
     answer, sources = await pipeline.ask(body.query, top_k=body.top_k)
+    log_event(
+        "query_received",
+        endpoint="search",
+        query_text=body.query,
+        num_sources=len(sources),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        **identity,
+    )
     return SearchResponse(
         answer=answer,
         sources=[_to_source_doc(doc) for doc in sources],
@@ -72,8 +85,21 @@ async def search_trials_stream(
     query: str = Query(..., min_length=1),
     top_k: int = Query(default=5, ge=1, le=20),
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    identity: dict = Depends(get_identity),
 ):
+    started = time.monotonic()
     stream, sources = await pipeline.ask_stream(query, top_k=top_k)
+    # Log retrieval as soon as sources are known. We don't wait for the full
+    # streaming generation to finish — for analytics, "the user asked and got
+    # N candidates back" is the event worth recording.
+    log_event(
+        "query_received",
+        endpoint="search_stream",
+        query_text=query,
+        num_sources=len(sources),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        **identity,
+    )
 
     async def event_generator():
         source_docs = [_to_source_doc(doc).model_dump() for doc in sources]

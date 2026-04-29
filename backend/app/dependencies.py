@@ -41,3 +41,16 @@ def get_client(request: Request) -> anthropic.AsyncAnthropic:
 
 def get_aliases(request: Request) -> dict[str, str]:
     return getattr(request.app.state, "aliases", {})
+
+
+def get_identity(request: Request) -> dict[str, str | None]:
+    """Pull the anonymous user_id + session_id the frontend sets in headers.
+
+    Returns a dict so endpoints can `**identity` into log_event(). Both keys
+    may be None for direct API hits (curl, smoke tests) — that's fine; the
+    analytics layer drops None fields.
+    """
+    return {
+        "user_id": request.headers.get("x-user-id"),
+        "session_id": request.headers.get("x-session-id"),
+    }
