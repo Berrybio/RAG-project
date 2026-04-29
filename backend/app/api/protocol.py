@@ -1,7 +1,10 @@
+import time
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ..dependencies import get_pipeline, get_client
+from ..core.analytics import log_event
+from ..dependencies import get_identity, get_pipeline, get_client
 from ..models.schemas import (
     ProtocolRequest,
     ProtocolResponse,
@@ -29,10 +32,21 @@ async def create_protocol_json(
     body: ProtocolRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
     client: anthropic.AsyncAnthropic = Depends(get_client),
+    identity: dict = Depends(get_identity),
 ):
+    started = time.monotonic()
     retrieved = pipeline.retrieve(body.query, top_k=body.top_k)
     protocol = await generate_protocol_json(
         client, body.query, retrieved, model=pipeline.model,
+    )
+    log_event(
+        "protocol_generated",
+        format="json",
+        phase=protocol.get("phase"),
+        study_type=protocol.get("study_type"),
+        num_reference_trials=len(retrieved),
+        latency_ms=int((time.monotonic() - started) * 1000),
+        **identity,
     )
     return ProtocolResponse(
         protocol=protocol,
@@ -51,14 +65,26 @@ async def refine_protocol(
     body: RefineProtocolRequest,
     client: anthropic.AsyncAnthropic = Depends(get_client),
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    identity: dict = Depends(get_identity),
 ):
     """Apply a clinician's correction request to an existing protocol JSON."""
+    started = time.monotonic()
     updated, note, changed = await refine_protocol_json(
         client,
         current_protocol=body.protocol,
         refinement_messages=[m.model_dump() for m in body.refinement_messages],
         original_summary=body.original_summary,
         model=pipeline.model,
+    )
+    # turn_number = how many refinement rounds the user has done so far
+    turn_number = sum(1 for m in body.refinement_messages if m.role == "user")
+    log_event(
+        "protocol_refined",
+        turn_number=turn_number,
+        sections_changed=changed,
+        num_sections_changed=len(changed) if changed else 0,
+        latency_ms=int((time.monotonic() - started) * 1000),
+        **identity,
     )
     return RefineProtocolResponse(
         protocol=updated,
@@ -68,9 +94,19 @@ async def refine_protocol(
 
 
 @router.post("/protocol/docx")
-async def create_protocol_docx(body: DocxRequest):
+async def create_protocol_docx(
+    body: DocxRequest,
+    identity: dict = Depends(get_identity),
+):
     buffer = build_protocol_docx(body.protocol)
     filename = _protocol_filename(body.protocol, "docx")
+    log_event(
+        "protocol_downloaded",
+        format="docx",
+        phase=body.protocol.get("phase"),
+        study_type=body.protocol.get("study_type"),
+        **identity,
+    )
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -79,13 +115,23 @@ async def create_protocol_docx(body: DocxRequest):
 
 
 @router.post("/protocol/pdf")
-async def create_protocol_pdf(body: DocxRequest):
+async def create_protocol_pdf(
+    body: DocxRequest,
+    identity: dict = Depends(get_identity),
+):
     """Build and return a PDF rendering of the protocol.
 
     Reuses DocxRequest since the payload shape ({"protocol": {...}}) is the same.
     """
     buffer = build_protocol_pdf(body.protocol)
     filename = _protocol_filename(body.protocol, "pdf")
+    log_event(
+        "protocol_downloaded",
+        format="pdf",
+        phase=body.protocol.get("phase"),
+        study_type=body.protocol.get("study_type"),
+        **identity,
+    )
     return StreamingResponse(
         buffer,
         media_type="application/pdf",

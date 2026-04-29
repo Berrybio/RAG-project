@@ -1,4 +1,44 @@
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = "/api";
+
+// --- Anonymous identity for analytics ---
+// user_id persists across sessions in localStorage (per-browser, per-device).
+// session_id is fresh on every page load (sessionStorage clears on tab close).
+// Both ride along as request headers; the backend logs them with each event,
+// which lets BigQuery answer DAU / cohort retention / funnel questions later.
+// No PII collected — these are random UUIDs, not tied to any real identity.
+const ANALYTICS_USER_ID = (() => {
+  let id = localStorage.getItem("berrybio_user_id");
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) ||
+         Date.now().toString(36) + Math.random().toString(36).slice(2);
+    localStorage.setItem("berrybio_user_id", id);
+  }
+  return id;
+})();
+
+const ANALYTICS_SESSION_ID = (() => {
+  let id = sessionStorage.getItem("berrybio_session_id");
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) ||
+         Date.now().toString(36) + Math.random().toString(36).slice(2);
+    sessionStorage.setItem("berrybio_session_id", id);
+  }
+  return id;
+})();
+
+// Centralized fetch wrapper so every API call carries the analytics headers
+// without each call site having to remember. Merges with caller-supplied
+// headers (e.g. Content-Type) instead of overwriting.
+async function apiFetch(path, opts = {}) {
+  const baseHeaders = {
+    "X-User-Id": ANALYTICS_USER_ID,
+    "X-Session-Id": ANALYTICS_SESSION_ID,
+  };
+  return fetch(path, {
+    ...opts,
+    headers: { ...baseHeaders, ...(opts.headers || {}) },
+  });
+}
 
 // --- Source card rendering ---
 function renderSourceCard(source) {
@@ -343,7 +383,7 @@ function showToast(message, kind) {
 }
 
 async function postFeedback(payload) {
-  const resp = await fetch(`${API_BASE}/feedback`, {
+  const resp = await apiFetch(`${API_BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -574,7 +614,7 @@ async function plannerSend() {
   let streamSources = [];
 
   try {
-    const resp = await fetch(`${API_BASE}/chat/stream`, {
+    const resp = await apiFetch(`${API_BASE}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -683,7 +723,7 @@ async function plannerSummarize() {
   e.summaryContent.textContent = "Generating summary...";
 
   try {
-    const resp = await fetch(`${API_BASE}/chat/summarize`, {
+    const resp = await apiFetch(`${API_BASE}/chat/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: plannerState.messages }),
@@ -709,7 +749,7 @@ async function plannerGenerateProtocol() {
   e.genProtocolBtn.disabled = true;
 
   try {
-    const resp = await fetch(`${API_BASE}/protocol/json`, {
+    const resp = await apiFetch(`${API_BASE}/protocol/json`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -815,7 +855,7 @@ async function plannerSendRefinement() {
   e.refineThread.scrollTop = e.refineThread.scrollHeight;
 
   try {
-    const resp = await fetch(`${API_BASE}/protocol/refine`, {
+    const resp = await apiFetch(`${API_BASE}/protocol/refine`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1012,7 +1052,7 @@ async function plannerDownloadProtocolAs(format) {
   btn.disabled = true;
   btn.textContent = "Downloading...";
   try {
-    const resp = await fetch(`${API_BASE}/protocol/${format}`, {
+    const resp = await apiFetch(`${API_BASE}/protocol/${format}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ protocol: plannerState.currentProtocol }),
@@ -1175,7 +1215,7 @@ function adminRenderFeedbackRow(entry) {
         promoteBtn.disabled = true;
         promoteBtn.textContent = "Promoting...";
         try {
-          const resp = await fetch(`${API_BASE}/feedback/promote`, {
+          const resp = await apiFetch(`${API_BASE}/feedback/promote`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ feedback_id: entry.id, alias, canonical }),
@@ -1213,7 +1253,7 @@ function adminRenderFeedbackRow(entry) {
 
 async function adminUpdateStatus(id, status) {
   try {
-    const resp = await fetch(`${API_BASE}/feedback/${id}/status`, {
+    const resp = await apiFetch(`${API_BASE}/feedback/${id}/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
@@ -1231,8 +1271,8 @@ async function adminLoad() {
   e.feedbackList.textContent = "Loading...";
   try {
     const [feedbackResp, aliasesResp] = await Promise.all([
-      fetch(`${API_BASE}/feedback`),
-      fetch(`${API_BASE}/aliases`),
+      apiFetch(`${API_BASE}/feedback`),
+      apiFetch(`${API_BASE}/aliases`),
     ]);
     if (!feedbackResp.ok) throw new Error(`/feedback ${feedbackResp.status}`);
     if (!aliasesResp.ok) throw new Error(`/aliases ${aliasesResp.status}`);

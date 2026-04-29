@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from ..core.analytics import log_event
+from ..dependencies import get_identity
 from ..core.feedback import (
     FeedbackPaths,
     add_alias,
@@ -56,11 +58,26 @@ def _truncate_context(ctx: dict) -> dict:
 async def post_feedback(
     body: RatingFeedback | CorrectionFeedback,
     paths: FeedbackPaths = Depends(get_feedback_paths),
+    identity: dict = Depends(get_identity),
 ):
     payload = body.model_dump()
     if "context" in payload:
         payload["context"] = _truncate_context(payload["context"])
     stored = append_feedback(paths, payload)
+    # Two distinct signals matter for analytics: (a) which kind of feedback it
+    # was — thumbs up vs thumbs down vs free-text correction; (b) the query
+    # that produced the answer being rated. Pull both out of the truncated
+    # context the client sent, falling back gracefully when fields are absent.
+    ctx = payload.get("context") or {}
+    log_event(
+        "feedback_submitted",
+        feedback_id=stored["id"],
+        kind=payload.get("type"),  # rating_up | rating_down | correction
+        correction_kind=payload.get("correction_kind"),
+        query_text=ctx.get("query"),
+        correction_text=payload.get("notes") or payload.get("reason"),
+        **identity,
+    )
     return FeedbackResponse(id=stored["id"], status=stored.get("status", "open"))
 
 
@@ -100,6 +117,14 @@ async def promote_to_alias(
     new_aliases = add_alias(paths, body.alias, body.canonical)
     update_feedback_status(paths, body.feedback_id, "resolved")
     request.app.state.aliases = new_aliases
+    log_event(
+        "feedback_promoted",
+        feedback_id=body.feedback_id,
+        alias=body.alias,
+        canonical=body.canonical,
+        # No identity from the admin endpoint — admins typically have URL-flag
+        # access, not the cookie. The action itself is what matters.
+    )
     return AliasesResponse(aliases=new_aliases)
 
 
