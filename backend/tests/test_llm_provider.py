@@ -127,6 +127,35 @@ def test_factory_falls_back_to_claude_model(settings):
     assert provider.model == "claude-sonnet-4-20250514"
 
 
+def test_factory_logs_experimental_warning_for_non_default(settings, caplog):
+    """Picking a non-default provider must log a loud WARNING so the
+    experimental status is unmissable in Cloud Logging on every cold start.
+    Anthropic (the default) must NOT trigger the warning."""
+    import logging
+
+    # Non-default → expect WARNING
+    settings.llm_provider = "deepseek"
+    settings.deepseek_api_key = "test-key"
+    settings.llm_model = "deepseek-chat"
+    with caplog.at_level(logging.WARNING, logger="app.core.llm"):
+        get_llm_provider()
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("EXPERIMENTAL" in r.message for r in warnings), (
+        "non-default provider must log an experimental warning"
+    )
+
+    # Default → no warning
+    caplog.clear()
+    settings.llm_provider = "anthropic"
+    settings.anthropic_api_key = "test-key"
+    settings.llm_model = "claude-sonnet-4-20250514"
+    with caplog.at_level(logging.WARNING, logger="app.core.llm"):
+        get_llm_provider()
+    assert not any("EXPERIMENTAL" in r.message for r in caplog.records), (
+        "default provider must NOT log an experimental warning"
+    )
+
+
 def test_factory_case_and_whitespace_insensitive(settings):
     """LLM_PROVIDER values get lowered + stripped — typos in env files
     shouldn't blow up startup."""
