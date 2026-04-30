@@ -1,7 +1,7 @@
 import logging
 from collections.abc import AsyncGenerator
 
-import anthropic
+from .llm import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -115,42 +115,42 @@ def _assistant_prefill(retrieved_docs: list[dict]) -> str:
 
 
 async def generate_answer(
-    client: anthropic.AsyncAnthropic,
+    llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
-    model: str = "claude-sonnet-4-20250514",
 ) -> str:
-    """Send the query + retrieved context to Claude and return the full answer."""
+    """Send the query + retrieved context to the LLM and return the full answer.
+
+    Note: assistant prefill (a forced opening like "Looking at the retrieved
+    trials...") is an Anthropic-specific pattern and isn't part of the
+    OpenAI-compat shape, so we drop it from the messages array and instead
+    prepend it to the returned text. Other providers will naturally pick up
+    the same opening style from the system prompt.
+    """
     prefill = _assistant_prefill(retrieved_docs)
-    response = await client.messages.create(
-        model=model,
-        max_tokens=4096,
+    body = await llm.complete(
         system=SYSTEM_PROMPT,
         messages=[
             {"role": "user", "content": _build_user_message(query, retrieved_docs)},
-            {"role": "assistant", "content": prefill},
         ],
+        max_tokens=4096,
     )
-    return prefill + response.content[0].text
+    return prefill + body
 
 
 async def generate_answer_stream(
-    client: anthropic.AsyncAnthropic,
+    llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
-    model: str = "claude-sonnet-4-20250514",
 ) -> AsyncGenerator[str, None]:
     """Stream answer tokens as an async generator for SSE."""
     prefill = _assistant_prefill(retrieved_docs)
     yield prefill
-    async with client.messages.stream(
-        model=model,
-        max_tokens=4096,
+    async for text in llm.stream(
         system=SYSTEM_PROMPT,
         messages=[
             {"role": "user", "content": _build_user_message(query, retrieved_docs)},
-            {"role": "assistant", "content": prefill},
         ],
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
+        max_tokens=4096,
+    ):
+        yield text

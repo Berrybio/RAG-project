@@ -1,11 +1,10 @@
 import logging
 import re
 
-import anthropic
-
 from .data import build_documents, load_clinical_trials
 from .generation import generate_answer, generate_answer_stream
 from .landscape import classify_trial
+from .llm import BaseLLMProvider
 from .retriever import TFIDFRetriever, VoyageRetriever
 
 logger = logging.getLogger(__name__)
@@ -507,8 +506,7 @@ class ClinicalTrialRAG:
     def __init__(
         self,
         csv_path: str,
-        client: anthropic.AsyncAnthropic,
-        model: str = "claude-sonnet-4-20250514",
+        llm: BaseLLMProvider,
         retriever_type: str = "voyage",
         voyage_api_key: str = "",
     ):
@@ -525,9 +523,17 @@ class ClinicalTrialRAG:
             logger.info("Using TF-IDF sparse retriever")
             self.retriever = TFIDFRetriever(self.documents)
 
-        self.client = client
-        self.model = model
-        logger.info("RAG pipeline ready (%d trials indexed)", len(self.documents))
+        self.llm = llm
+        logger.info(
+            "RAG pipeline ready (%d trials indexed, llm=%s/%s)",
+            len(self.documents), llm.name, llm.model,
+        )
+
+    @property
+    def model(self) -> str:
+        """Backward-compat shim: some call sites and the /health endpoint
+        still read pipeline.model. Delegates to the active provider."""
+        return self.llm.model
 
     def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
         """Retrieve relevant trials without generating an answer."""
@@ -597,7 +603,7 @@ class ClinicalTrialRAG:
         retrieved = self._retrieve_with_country_filter(query, top_k)
         if not retrieved:
             return "No relevant clinical trials found for your query.", []
-        answer = await generate_answer(self.client, query, retrieved, self.model)
+        answer = await generate_answer(self.llm, query, retrieved)
         return answer, retrieved
 
     async def ask_stream(self, query: str, top_k: int = 5):
@@ -605,5 +611,5 @@ class ClinicalTrialRAG:
         retrieved = self._retrieve_with_country_filter(query, top_k)
         if not retrieved:
             return None, []
-        stream = generate_answer_stream(self.client, query, retrieved, self.model)
+        stream = generate_answer_stream(self.llm, query, retrieved)
         return stream, retrieved

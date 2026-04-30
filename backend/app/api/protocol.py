@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from ..core.analytics import log_event
-from ..dependencies import get_identity, get_pipeline, get_client
+from ..core.llm import BaseLLMProvider
+from ..dependencies import get_identity, get_llm, get_pipeline
 from ..models.schemas import (
     ProtocolRequest,
     ProtocolResponse,
@@ -22,8 +23,6 @@ from ..core.protocol import (
 )
 from ..api.search import _to_source_doc
 
-import anthropic
-
 router = APIRouter()
 
 
@@ -31,14 +30,12 @@ router = APIRouter()
 async def create_protocol_json(
     body: ProtocolRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
-    client: anthropic.AsyncAnthropic = Depends(get_client),
+    llm: BaseLLMProvider = Depends(get_llm),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
     retrieved = pipeline.retrieve(body.query, top_k=body.top_k)
-    protocol = await generate_protocol_json(
-        client, body.query, retrieved, model=pipeline.model,
-    )
+    protocol = await generate_protocol_json(llm, body.query, retrieved)
     log_event(
         "protocol_generated",
         format="json",
@@ -63,18 +60,16 @@ def _protocol_filename(protocol: dict, extension: str) -> str:
 @router.post("/protocol/refine", response_model=RefineProtocolResponse)
 async def refine_protocol(
     body: RefineProtocolRequest,
-    client: anthropic.AsyncAnthropic = Depends(get_client),
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    llm: BaseLLMProvider = Depends(get_llm),
     identity: dict = Depends(get_identity),
 ):
     """Apply a clinician's correction request to an existing protocol JSON."""
     started = time.monotonic()
     updated, note, changed = await refine_protocol_json(
-        client,
+        llm,
         current_protocol=body.protocol,
         refinement_messages=[m.model_dump() for m in body.refinement_messages],
         original_summary=body.original_summary,
-        model=pipeline.model,
     )
     # turn_number = how many refinement rounds the user has done so far
     turn_number = sum(1 for m in body.refinement_messages if m.role == "user")

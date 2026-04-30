@@ -27,9 +27,14 @@ def client():
     mock_pipeline.retriever = retriever
     mock_pipeline.retrieve = retriever.retrieve
 
-    mock_client = AsyncMock()
+    # Provider-agnostic mock: tests only need the LLM dependency to exist
+    # on app.state. Routes that actually invoke the LLM are mocked at the
+    # function level (see test_search_endpoint's mock of pipeline.ask).
+    mock_llm = AsyncMock()
+    mock_llm.name = "mock"
+    mock_llm.model = "test-model"
     app.state.pipeline = mock_pipeline
-    app.state.client = mock_client
+    app.state.llm = mock_llm
 
     return TestClient(app)
 

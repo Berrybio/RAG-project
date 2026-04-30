@@ -2,11 +2,32 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    anthropic_api_key: str
+    # ----- LLM provider selection -----
+    # Which provider to use at runtime. See app.core.llm._PROVIDERS for the
+    # current set; adding a new one is a small change in that module.
+    llm_provider: str = "anthropic"  # anthropic | openai | deepseek | kimi
+    # Model identifier passed to the underlying API (e.g.
+    # "claude-sonnet-4-20250514", "deepseek-chat", "moonshot-v1-32k").
+    # Falls back to claude_model below when unset, for backward compatibility
+    # with deploys that only had CLAUDE_MODEL configured.
+    llm_model: str = ""
+
+    # ----- Per-provider API keys (only the active provider's key is required) -----
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    deepseek_api_key: str = ""
+    moonshot_api_key: str = ""  # Kimi
+
+    # ----- Retrieval -----
     voyage_api_key: str = ""
     retriever_type: str = "voyage"  # "voyage" or "tfidf"
     csv_path: str = "data/breast_cancer_trials_full_2026-04-14.csv"
+
+    # Legacy / backward-compat: still read CLAUDE_MODEL from env so existing
+    # deploys keep working unchanged. The factory uses this as the fallback
+    # when llm_model is empty. New deploys should set LLM_MODEL instead.
     claude_model: str = "claude-sonnet-4-20250514"
+
     log_level: str = "info"
     allowed_origins: str = "http://localhost:3000,http://localhost:80,http://localhost:5173"
 

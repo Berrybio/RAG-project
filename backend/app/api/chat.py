@@ -3,13 +3,13 @@ import json
 import time
 from typing import Literal
 
-import anthropic
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..core.analytics import log_event
-from ..dependencies import get_aliases, get_identity, get_pipeline, get_client
+from ..core.llm import BaseLLMProvider
+from ..dependencies import get_aliases, get_identity, get_llm, get_pipeline
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
@@ -57,7 +57,7 @@ class SummarizeResponse(BaseModel):
 async def chat_stream(
     body: ChatRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
-    client: anthropic.AsyncAnthropic = Depends(get_client),
+    llm: BaseLLMProvider = Depends(get_llm),
     aliases: dict = Depends(get_aliases),
     identity: dict = Depends(get_identity),
 ):
@@ -161,7 +161,7 @@ async def chat_stream(
 
         try:
             async for token in generate_chat_stream(
-                client, history, retrieved, pipeline.model,
+                llm, history, retrieved,
                 landscape=landscape, aliases=aliases,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
@@ -179,9 +179,8 @@ async def chat_stream(
 @router.post("/chat/summarize", response_model=SummarizeResponse)
 async def chat_summarize(
     body: SummarizeRequest,
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
-    client: anthropic.AsyncAnthropic = Depends(get_client),
+    llm: BaseLLMProvider = Depends(get_llm),
 ):
     history = [m.model_dump() for m in body.messages]
-    summary = await summarize_conversation(client, history, pipeline.model)
+    summary = await summarize_conversation(llm, history)
     return SummarizeResponse(summary=summary)
