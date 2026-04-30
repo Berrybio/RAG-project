@@ -2,7 +2,6 @@ import json
 import logging
 from io import BytesIO
 
-import anthropic
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -23,6 +22,7 @@ from reportlab.platypus import (
 )
 
 from .generation import format_context
+from .llm import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +144,11 @@ OBSERVATIONAL / RWE ADAPTATIONS (when phase is "N/A"):
 
 
 async def generate_protocol_json(
-    client: anthropic.AsyncAnthropic,
+    llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
-    model: str = "claude-sonnet-4-20250514",
 ) -> dict:
-    """Ask Claude to draft a protocol based on RAG-retrieved trials; return parsed JSON dict."""
+    """Ask the LLM to draft a protocol based on RAG-retrieved trials; return parsed JSON dict."""
     context = format_context(retrieved_docs)
 
     user_msg = (
@@ -165,20 +164,16 @@ async def generate_protocol_json(
     )
 
     # Use streaming for long generations (max_tokens=8192). Non-streaming
-    # requests with high max_tokens can exceed the Anthropic API gateway
-    # timeout and fail with APIConnectionError. Streaming keeps the
-    # connection warm token-by-token; we accumulate the full response.
-    chunks: list[str] = []
-    async with client.messages.stream(
-        model=model,
-        max_tokens=8192,
-        system=PROTOCOL_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
-    ) as stream:
-        async for text in stream.text_stream:
-            chunks.append(text)
-
-    raw = "".join(chunks).strip()
+    # requests with high max_tokens can exceed the API gateway timeout and
+    # fail with APIConnectionError. Streaming keeps the connection warm
+    # token-by-token; complete() accumulates the full response.
+    raw = (
+        await llm.complete(
+            system=PROTOCOL_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+            max_tokens=8192,
+        )
+    ).strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0]
@@ -232,11 +227,10 @@ Follow all the same domain conventions as the original protocol prompt:
 
 
 async def refine_protocol_json(
-    client: anthropic.AsyncAnthropic,
+    llm: BaseLLMProvider,
     current_protocol: dict,
     refinement_messages: list[dict],
     original_summary: str,
-    model: str = "claude-sonnet-4-20250514",
 ) -> tuple[dict, str, list[str]]:
     """Apply a clinician's correction request to an existing protocol.
 
@@ -261,17 +255,13 @@ async def refine_protocol_json(
         f"CHANGES: line, then the NOTE: line, per the system prompt."
     )
 
-    chunks: list[str] = []
-    async with client.messages.stream(
-        model=model,
-        max_tokens=8192,
-        system=REFINE_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
-    ) as stream:
-        async for text in stream.text_stream:
-            chunks.append(text)
-
-    raw = "".join(chunks).strip()
+    raw = (
+        await llm.complete(
+            system=REFINE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+            max_tokens=8192,
+        )
+    ).strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
         raw = raw.rsplit("```", 1)[0].strip()
