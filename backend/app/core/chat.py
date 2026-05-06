@@ -12,6 +12,7 @@ import logging
 from collections.abc import AsyncGenerator
 
 from .feedback import aliases_prompt_block
+from .feedback_examples import FeedbackExampleStore, format_examples_block
 from .generation import format_context
 from .landscape import format_landscape_for_llm
 from .llm import BaseLLMProvider
@@ -166,6 +167,7 @@ async def generate_chat_stream(
     retrieved_docs: list[dict],
     landscape: dict | None = None,
     aliases: dict[str, str] | None = None,
+    examples: FeedbackExampleStore | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
@@ -174,6 +176,9 @@ async def generate_chat_stream(
     the latest user turn only — older turns keep their original content.
     `aliases` (when provided) is appended to the system prompt as a "Known
     drug aliases" block so the model uses canonical names in its prose.
+    `examples` is the up-voted few-shot store; the most similar past
+    (question, answer) pair is appended to the system prompt to anchor the
+    reply structure on what the user has already endorsed.
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Chat history must end with a user message")
@@ -188,6 +193,10 @@ async def generate_chat_stream(
     aliases_block = aliases_prompt_block(aliases or {})
     if aliases_block:
         system_prompt = f"{system_prompt}\n\n{aliases_block}"
+    if examples is not None:
+        examples_block = format_examples_block(examples.pick(messages[-1]["content"]))
+        if examples_block:
+            system_prompt = f"{system_prompt}\n\n{examples_block}"
 
     async for text in llm.stream(
         system=system_prompt,

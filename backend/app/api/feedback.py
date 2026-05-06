@@ -24,6 +24,8 @@ from ..core.feedback import (
     read_feedback,
     update_feedback_status,
 )
+from ..core.feedback_examples import FeedbackExampleStore
+from ..core.feedback_reranker import compute_source_scores
 from ..models.schemas import (
     AliasesResponse,
     CorrectionFeedback,
@@ -48,15 +50,21 @@ _MAX_CONTEXT_CHARS = 2000
 
 
 def _truncate_context(ctx: dict) -> dict:
+    # Cap the source list too — a long landscape diversification can return
+    # 12-15 trials, but past 25 is almost certainly junk or a bug.
+    raw_sources = ctx.get("source_nct_ids") or []
+    sources = [str(s).strip() for s in raw_sources if s][:25]
     return {
         "query": (ctx.get("query") or "")[:_MAX_CONTEXT_CHARS],
         "assistant_message": (ctx.get("assistant_message") or "")[:_MAX_CONTEXT_CHARS],
+        "source_nct_ids": sources,
     }
 
 
 @router.post("/feedback", response_model=FeedbackResponse)
 async def post_feedback(
     body: RatingFeedback | CorrectionFeedback,
+    request: Request,
     paths: FeedbackPaths = Depends(get_feedback_paths),
     identity: dict = Depends(get_identity),
 ):
@@ -64,6 +72,13 @@ async def post_feedback(
     if "context" in payload:
         payload["context"] = _truncate_context(payload["context"])
     stored = append_feedback(paths, payload)
+    # Refresh derived caches so the next retrieval / next chat reply already
+    # feels this feedback. Both are cheap to recompute (the feedback log is
+    # human-scale) and only ratings actually move them — corrections are a
+    # no-op for both.
+    if payload.get("type") in ("rating_up", "rating_down"):
+        request.app.state.source_scores = compute_source_scores(paths)
+        request.app.state.examples = FeedbackExampleStore.load(paths)
     # Two distinct signals matter for analytics: (a) which kind of feedback it
     # was — thumbs up vs thumbs down vs free-text correction; (b) the query
     # that produced the answer being rated. Pull both out of the truncated

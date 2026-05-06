@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 
 from ..core.analytics import log_event
 from ..core.llm import BaseLLMProvider
-from ..dependencies import get_identity, get_llm, get_pipeline
+from ..dependencies import get_identity, get_llm, get_pipeline, get_source_scores
 from ..models.schemas import (
     ProtocolRequest,
     ProtocolResponse,
@@ -31,10 +31,13 @@ async def create_protocol_json(
     body: ProtocolRequest,
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
     llm: BaseLLMProvider = Depends(get_llm),
+    source_scores: dict = Depends(get_source_scores),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
-    retrieved = pipeline.retrieve(body.query, top_k=body.top_k)
+    retrieved = pipeline.retrieve(
+        body.query, top_k=body.top_k, source_scores=source_scores,
+    )
     protocol = await generate_protocol_json(llm, body.query, retrieved)
     log_event(
         "protocol_generated",

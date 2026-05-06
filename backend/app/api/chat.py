@@ -9,10 +9,18 @@ from pydantic import BaseModel, Field
 
 from ..core.analytics import log_event
 from ..core.llm import BaseLLMProvider
-from ..dependencies import get_aliases, get_identity, get_llm, get_pipeline
+from ..dependencies import (
+    get_aliases,
+    get_examples,
+    get_identity,
+    get_llm,
+    get_pipeline,
+    get_source_scores,
+)
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
+from ..core.feedback_examples import FeedbackExampleStore
 from ..core.landscape import (
     compute_landscape,
     detect_disease,
@@ -59,6 +67,8 @@ async def chat_stream(
     pipeline: ClinicalTrialRAG = Depends(get_pipeline),
     llm: BaseLLMProvider = Depends(get_llm),
     aliases: dict = Depends(get_aliases),
+    source_scores: dict = Depends(get_source_scores),
+    examples: FeedbackExampleStore | None = Depends(get_examples),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
@@ -95,7 +105,9 @@ async def chat_stream(
     # the LLM sees representative coverage rather than top-K near-duplicates.
     # If they opted out, they want focused similarity-ranked results.
     if merged_filters and body.include_landscape:
-        pool = pipeline.retrieve(retrieval_query, top_k=_OVERFETCH_POOL)
+        pool = pipeline.retrieve(
+            retrieval_query, top_k=_OVERFETCH_POOL, source_scores=source_scores,
+        )
 
         # Dense retrieval ranks by similarity but doesn't enforce phase/status,
         # so a query like "Phase III PD-(L)1 in TNBC" can pull Phase I/II
@@ -115,7 +127,9 @@ async def chat_stream(
 
         retrieved = diversify_by_drug_class(pool, _DIVERSIFIED_BUDGET) or pool[: body.top_k]
     else:
-        retrieved = pipeline.retrieve(retrieval_query, top_k=body.top_k)
+        retrieved = pipeline.retrieve(
+            retrieval_query, top_k=body.top_k, source_scores=source_scores,
+        )
 
     # Stabilize ordering with two priority tiers (Python's sort is stable, so
     # retrieval rank is preserved within each bucket). Sponsor is the primary
@@ -162,7 +176,7 @@ async def chat_stream(
         try:
             async for token in generate_chat_stream(
                 llm, history, retrieved,
-                landscape=landscape, aliases=aliases,
+                landscape=landscape, aliases=aliases, examples=examples,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"

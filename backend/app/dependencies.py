@@ -5,6 +5,8 @@ from fastapi import FastAPI, Request
 
 from .config import settings
 from .core.feedback import FeedbackPaths, load_aliases
+from .core.feedback_examples import FeedbackExampleStore
+from .core.feedback_reranker import compute_source_scores
 from .core.llm import BaseLLMProvider, get_llm_provider
 from .core.pipeline import ClinicalTrialRAG
 
@@ -30,6 +32,11 @@ async def lifespan(app: FastAPI):
     app.state.llm = llm
     app.state.feedback_paths = feedback_paths
     app.state.aliases = load_aliases(feedback_paths)
+    # Reranker scores + few-shot examples are derived from the same feedback
+    # log. Both are rebuilt on each /api/feedback POST so the next request
+    # already feels the change without restarting the server.
+    app.state.source_scores = compute_source_scores(feedback_paths)
+    app.state.examples = FeedbackExampleStore.load(feedback_paths)
     yield
 
 
@@ -44,6 +51,14 @@ def get_llm(request: Request) -> BaseLLMProvider:
 
 def get_aliases(request: Request) -> dict[str, str]:
     return getattr(request.app.state, "aliases", {})
+
+
+def get_source_scores(request: Request) -> dict[str, float]:
+    return getattr(request.app.state, "source_scores", {})
+
+
+def get_examples(request: Request) -> "FeedbackExampleStore | None":
+    return getattr(request.app.state, "examples", None)
 
 
 def get_identity(request: Request) -> dict[str, str | None]:
