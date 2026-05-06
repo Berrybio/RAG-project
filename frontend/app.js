@@ -394,16 +394,21 @@ async function postFeedback(payload) {
 
 // Snapshot the latest user query + this assistant reply so admins reviewing
 // the feedback queue can see what was being reacted to without correlating
-// timestamps across logs.
-function feedbackContextFor(assistantText) {
+// timestamps across logs. The source NCT ids ride along too — the backend
+// reranker uses them to learn from 👍/👎 per trial.
+function feedbackContextFor(assistantText, sources) {
   const lastUser = [...plannerState.messages].reverse().find((m) => m.role === "user");
+  const sourceIds = (sources || [])
+    .map((s) => (s && s.nct_id) || "")
+    .filter(Boolean);
   return {
     query: lastUser ? lastUser.content : "",
     assistant_message: assistantText || "",
+    source_nct_ids: sourceIds,
   };
 }
 
-function attachFeedbackBar(messageDiv, assistantText) {
+function attachFeedbackBar(messageDiv, assistantText, sources) {
   const bar = document.createElement("div");
   bar.className = "feedback-bar";
 
@@ -441,7 +446,7 @@ function attachFeedbackBar(messageDiv, assistantText) {
     try {
       await postFeedback({
         type: "rating_up",
-        context: feedbackContextFor(assistantText),
+        context: feedbackContextFor(assistantText, sources),
       });
       const thanks = document.createElement("span");
       thanks.className = "feedback-thanks";
@@ -467,7 +472,7 @@ function attachFeedbackBar(messageDiv, assistantText) {
     try {
       const resp = await postFeedback({
         type: "rating_down",
-        context: feedbackContextFor(assistantText),
+        context: feedbackContextFor(assistantText, sources),
       });
       initialId = resp.id;
     } catch (err) {
@@ -499,7 +504,7 @@ function attachFeedbackBar(messageDiv, assistantText) {
       try {
         await postFeedback({
           type: "rating_down",
-          context: feedbackContextFor(assistantText),
+          context: feedbackContextFor(assistantText, sources),
           reason: text,
         });
         reasonWrap.remove();
@@ -701,7 +706,7 @@ async function plannerSend() {
     plannerState.messages.push({ role: "assistant", content: assistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
     attachChoicesToMessage(assistantDiv, choices);
-    attachFeedbackBar(assistantDiv, assistantText);
+    attachFeedbackBar(assistantDiv, assistantText, streamSources);
     revealPlannerActions();
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;

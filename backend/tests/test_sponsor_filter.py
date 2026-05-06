@@ -58,11 +58,17 @@ def test_pipeline_sponsor_filter_end_to_end(sample_csv, monkeypatch):
     contains higher-similarity matches without sponsor context."""
     from unittest.mock import MagicMock
 
+    from app.core.llm import BaseLLMProvider
     from app.core.pipeline import ClinicalTrialRAG
 
+    # Mock the LLM provider — this test exercises retrieval only, no
+    # generation, so the LLM never actually gets called.
+    mock_llm = MagicMock(spec=BaseLLMProvider)
+    mock_llm.name = "mock"
+    mock_llm.model = "test-model"
     pipeline = ClinicalTrialRAG(
         csv_path=sample_csv,
-        client=MagicMock(),
+        llm=mock_llm,
         retriever_type="tfidf",
         voyage_api_key="",
     )

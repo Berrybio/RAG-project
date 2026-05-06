@@ -98,11 +98,13 @@ class HealthResponse(BaseModel):
 
 class FeedbackContext(BaseModel):
     """Snapshot of the conversation around a feedback event so an admin
-    reviewing the queue later can see what the user was reacting to."""
+    reviewing the queue later can see what the user was reacting to.
+
+    `source_nct_ids` is the list of trial NCT IDs that were shown to the user
+    when they rated the answer — feeds the down-vote-aware reranker."""
     query: str = ""
     assistant_message: str = ""
-    # Server-side truncation happens in the route handler; allow extra fields
-    # silently in case the frontend later attaches NCT IDs or trial slices.
+    source_nct_ids: list[str] = Field(default_factory=list)
     model_config = {"extra": "ignore"}
 
 

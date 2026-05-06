@@ -1,11 +1,11 @@
 import logging
 import re
 
-import anthropic
-
 from .data import build_documents, load_clinical_trials
+from .feedback_reranker import adjust_scores
 from .generation import generate_answer, generate_answer_stream
 from .landscape import classify_trial
+from .llm import BaseLLMProvider
 from .retriever import TFIDFRetriever, VoyageRetriever
 
 logger = logging.getLogger(__name__)
@@ -507,8 +507,7 @@ class ClinicalTrialRAG:
     def __init__(
         self,
         csv_path: str,
-        client: anthropic.AsyncAnthropic,
-        model: str = "claude-sonnet-4-20250514",
+        llm: BaseLLMProvider,
         retriever_type: str = "voyage",
         voyage_api_key: str = "",
     ):
@@ -525,15 +524,36 @@ class ClinicalTrialRAG:
             logger.info("Using TF-IDF sparse retriever")
             self.retriever = TFIDFRetriever(self.documents)
 
-        self.client = client
-        self.model = model
-        logger.info("RAG pipeline ready (%d trials indexed)", len(self.documents))
+        self.llm = llm
+        logger.info(
+            "RAG pipeline ready (%d trials indexed, llm=%s/%s)",
+            len(self.documents), llm.name, llm.model,
+        )
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[dict]:
-        """Retrieve relevant trials without generating an answer."""
-        return self._retrieve_with_country_filter(query, top_k)
+    @property
+    def model(self) -> str:
+        """Backward-compat shim: some call sites and the /health endpoint
+        still read pipeline.model. Delegates to the active provider."""
+        return self.llm.model
 
-    def _retrieve_with_country_filter(self, query: str, top_k: int) -> list[dict]:
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        source_scores: dict[str, float] | None = None,
+    ) -> list[dict]:
+        """Retrieve relevant trials without generating an answer.
+
+        ``source_scores`` (when provided) nudges retrieval order based on past
+        user feedback per NCT id — see ``core.feedback_reranker``."""
+        return self._retrieve_with_country_filter(query, top_k, source_scores)
+
+    def _retrieve_with_country_filter(
+        self,
+        query: str,
+        top_k: int,
+        source_scores: dict[str, float] | None = None,
+    ) -> list[dict]:
         """Retrieve top_k docs, hard-filtering by the structured attributes named in the query."""
         countries = _extract_countries(query)
         states = _extract_us_states(query)
@@ -544,7 +564,12 @@ class ClinicalTrialRAG:
         drug_classes = _extract_drug_classes(query)
 
         if not any([countries, states, setting, study_type, statuses, sponsors, drug_classes]):
-            return self.retriever.retrieve(query, top_k=top_k)
+            # Over-fetch a modest pool so the feedback reranker has something
+            # to work with; otherwise it can only re-order an already-final
+            # top_k. When there's no feedback, this is a single extra slice.
+            pool_size = max(top_k * 3, 20) if source_scores else top_k
+            results = self.retriever.retrieve(query, top_k=pool_size)
+            return adjust_scores(results, source_scores)[:top_k]
 
         # Drug-class filters need both expansion (so dense retrieval finds the
         # specific drugs) and an aggressive pool — required-intersection
@@ -588,22 +613,32 @@ class ClinicalTrialRAG:
         )
         if not filtered:
             logger.info("Filter (%s) matched 0 trials — falling back to unfiltered results", filter_summary)
-            return pool[:top_k]
+            return adjust_scores(pool, source_scores)[:top_k]
         logger.info("Filter (%s) kept %d / %d retrieved trials", filter_summary, len(filtered), len(pool))
-        return filtered[:top_k]
+        return adjust_scores(filtered, source_scores)[:top_k]
 
-    async def ask(self, query: str, top_k: int = 5) -> tuple[str, list[dict]]:
+    async def ask(
+        self,
+        query: str,
+        top_k: int = 5,
+        source_scores: dict[str, float] | None = None,
+    ) -> tuple[str, list[dict]]:
         """Retrieve trials and generate a full answer. Returns (answer, sources)."""
-        retrieved = self._retrieve_with_country_filter(query, top_k)
+        retrieved = self._retrieve_with_country_filter(query, top_k, source_scores)
         if not retrieved:
             return "No relevant clinical trials found for your query.", []
-        answer = await generate_answer(self.client, query, retrieved, self.model)
+        answer = await generate_answer(self.llm, query, retrieved)
         return answer, retrieved
 
-    async def ask_stream(self, query: str, top_k: int = 5):
+    async def ask_stream(
+        self,
+        query: str,
+        top_k: int = 5,
+        source_scores: dict[str, float] | None = None,
+    ):
         """Retrieve trials and stream answer tokens. Returns (stream_generator, sources)."""
-        retrieved = self._retrieve_with_country_filter(query, top_k)
+        retrieved = self._retrieve_with_country_filter(query, top_k, source_scores)
         if not retrieved:
             return None, []
-        stream = generate_answer_stream(self.client, query, retrieved, self.model)
+        stream = generate_answer_stream(self.llm, query, retrieved)
         return stream, retrieved

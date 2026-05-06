@@ -3,21 +3,25 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 
-import anthropic
-
 from .config import settings
 from .core.feedback import FeedbackPaths, load_aliases
+from .core.feedback_examples import FeedbackExampleStore
+from .core.feedback_reranker import compute_source_scores
+from .core.llm import BaseLLMProvider, get_llm_provider
 from .core.pipeline import ClinicalTrialRAG
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load data and build TF-IDF index at startup."""
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    """Construct the LLM client + RAG pipeline + feedback paths once at startup.
+
+    Everything lives on app.state so request handlers can pull what they need
+    via FastAPI dependencies; there's no per-request construction cost.
+    """
+    llm = get_llm_provider()
     pipeline = ClinicalTrialRAG(
         csv_path=settings.csv_path,
-        client=client,
-        model=settings.claude_model,
+        llm=llm,
         retriever_type=settings.retriever_type,
         voyage_api_key=settings.voyage_api_key,
     )
@@ -25,9 +29,14 @@ async def lifespan(app: FastAPI):
     data_dir = Path(settings.csv_path).resolve().parent
     feedback_paths = FeedbackPaths.from_data_dir(data_dir)
     app.state.pipeline = pipeline
-    app.state.client = client
+    app.state.llm = llm
     app.state.feedback_paths = feedback_paths
     app.state.aliases = load_aliases(feedback_paths)
+    # Reranker scores + few-shot examples are derived from the same feedback
+    # log. Both are rebuilt on each /api/feedback POST so the next request
+    # already feels the change without restarting the server.
+    app.state.source_scores = compute_source_scores(feedback_paths)
+    app.state.examples = FeedbackExampleStore.load(feedback_paths)
     yield
 
 
@@ -35,12 +44,21 @@ def get_pipeline(request: Request) -> ClinicalTrialRAG:
     return request.app.state.pipeline
 
 
-def get_client(request: Request) -> anthropic.AsyncAnthropic:
-    return request.app.state.client
+def get_llm(request: Request) -> BaseLLMProvider:
+    """Provider-agnostic LLM dependency. Replaces the old `get_client`."""
+    return request.app.state.llm
 
 
 def get_aliases(request: Request) -> dict[str, str]:
     return getattr(request.app.state, "aliases", {})
+
+
+def get_source_scores(request: Request) -> dict[str, float]:
+    return getattr(request.app.state, "source_scores", {})
+
+
+def get_examples(request: Request) -> "FeedbackExampleStore | None":
+    return getattr(request.app.state, "examples", None)
 
 
 def get_identity(request: Request) -> dict[str, str | None]:
