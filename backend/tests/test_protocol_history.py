@@ -157,7 +157,9 @@ def test_query_mentions_previous_protocol_negative():
     assert not query_mentions_previous_protocol("design a new phase II protocol for TNBC")
 
 
-def test_match_query_picks_relevant_entry(tmp_path):
+def test_match_query_returns_all_ranked_with_relevant_first(tmp_path):
+    """When the user has multiple protocols, NL hints surface ALL of them
+    (capped) so the user can pick — but the most relevant comes first."""
     paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
     save_initial(
         paths, "user1",
@@ -170,18 +172,33 @@ def test_match_query_picks_relevant_entry(tmp_path):
         summary_brief="Phase III HR+ CDK4/6 trial",
     )
     matched = match_query_to_entry(paths, "user1", "edit my previous TNBC protocol")
-    assert len(matched) == 1
+    # Both entries surfaced for the user to pick from.
+    assert len(matched) == 2
+    # The TNBC one is ranked first because of the lexical overlap.
     assert "TNBC" in (matched[0]["title"] + matched[0]["conditions"])
 
 
-def test_match_query_falls_back_to_recent_when_no_semantic_match(tmp_path):
+def test_match_query_no_lexical_match_returns_all_by_recency(tmp_path):
+    """Wholly unrelated phrases (e.g. 'continue working on the previous
+    protocol') should still surface every stored protocol so the user
+    can pick one — ordered by recency when the query has nothing to rank
+    against."""
     paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
-    save_initial(paths, "user1", _proto(phase="Phase II"))
-    save_initial(paths, "user1", _proto(phase="Phase III"))
-    # Wholly unrelated phrase — should still return the most-recent entry
-    # rather than nothing, so the user always gets a clickable load chip.
-    matched = match_query_to_entry(paths, "user1", "based on the previous unrelated thing")
-    assert len(matched) == 1
+    a = save_initial(paths, "user1", _proto(phase="Phase II"))
+    b = save_initial(paths, "user1", _proto(phase="Phase III"))
+    matched = match_query_to_entry(paths, "user1", "continue with the previous protocol")
+    assert len(matched) == 2
+    # Most recent (Phase III) should rank first when there's no lexical signal.
+    assert matched[0]["id"] == b["id"]
+    assert matched[1]["id"] == a["id"]
+
+
+def test_match_query_caps_at_top_n(tmp_path):
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    for i in range(15):
+        save_initial(paths, "user1", _proto(phase=f"Phase {i}"))
+    matched = match_query_to_entry(paths, "user1", "edit my previous", top_n=5)
+    assert len(matched) == 5
 
 
 def test_match_query_empty_history(tmp_path):

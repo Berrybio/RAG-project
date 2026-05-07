@@ -51,10 +51,12 @@ _history_lock = threading.Lock()
 # anyway.
 _LIST_LIMIT_DEFAULT = 100
 
-# When matching an NL phrase like "based on the previous TNBC protocol" against
-# stored entries, anything below this TF-IDF cosine is too unrelated to surface
-# (matches the threshold used by the few-shot examples store).
-_NL_MIN_SIMILARITY = 0.15
+# Cap on how many entries we surface to the chat UI when the user invokes
+# the "previous protocol" NL hook. We rank by relevance but always return
+# everything (up to this cap) so the user can pick — filtering by similarity
+# threshold here would silently drop legitimate options when the new query
+# doesn't lexically overlap with the old protocol's title.
+_NL_LIST_CAP = 10
 
 
 # ---------------------------------------------------------------------------
@@ -399,17 +401,21 @@ def match_query_to_entry(
     paths: ProtocolHistoryPaths,
     user_id: str,
     query: str,
-    top_n: int = 1,
+    top_n: int = _NL_LIST_CAP,
 ) -> list[dict]:
-    """Pick the best stored entries for a user's NL hint.
+    """Return the user's stored protocols, ranked by relevance to ``query``.
 
-    Strategy:
-    1. If the user has stored exactly one protocol, return that.
-    2. Otherwise rank by TF-IDF cosine over (title + conditions +
-       intervention_name + study_design + summary_brief).
-    3. If no entry clears _NL_MIN_SIMILARITY, fall back to the most recent.
+    Behaviour: when the user invokes the "previous protocol" NL hook, we
+    surface ALL their stored protocols (up to ``top_n``) so they can pick.
+    No similarity threshold filtering — that would silently drop legitimate
+    options whenever the new query doesn't lexically overlap with the old
+    protocol's title (e.g. "continue working on the previous protocol" has
+    no overlap with any specific population term).
 
-    Returns up to ``top_n`` entry metas, best first.
+    Within the cap, entries are ordered by TF-IDF cosine over
+    ``(title + conditions + intervention + study_design + summary_brief)``,
+    breaking ties by recency (newest first). When the query has no useful
+    tokens, ranking collapses to pure recency.
     """
     rows = list_protocols(paths, user_id, limit=_LIST_LIMIT_DEFAULT)
     if not rows:
@@ -434,21 +440,11 @@ def match_query_to_entry(
     except ValueError:
         return rows[:top_n]
     sims = cosine_similarity(qv, matrix)[0]
-    order = sims.argsort()[::-1]
-    picked: list[dict] = []
-    for rank, idx in enumerate(order[:top_n]):
-        score = float(sims[int(idx)])
-        # Always accept the #1 match if it has any positive overlap — sparse
-        # 2-3 entry corpora produce small absolute cosines but the top match
-        # is still the right one. The threshold only filters secondary matches
-        # to avoid surfacing irrelevant additional chips.
-        if rank == 0 and score > 0:
-            picked.append(rows[int(idx)])
-            continue
-        if score >= _NL_MIN_SIMILARITY:
-            picked.append(rows[int(idx)])
-    if not picked:
-        # No semantic match at all — fall back to most recent so the user
-        # always gets *something* clickable.
-        picked = rows[:1]
-    return picked
+    # Stable sort: TF-IDF score desc, then preserve original (recency-desc)
+    # order for ties — Python's sort is stable, so we reverse-enumerate to
+    # encode "later index = older" as a tiebreaker.
+    indexed = sorted(
+        enumerate(sims),
+        key=lambda pair: (-float(pair[1]), pair[0]),
+    )
+    return [rows[i] for i, _ in indexed[:top_n]]

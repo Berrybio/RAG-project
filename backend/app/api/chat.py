@@ -163,15 +163,16 @@ async def chat_stream(
     )
 
     # Detect "based on the previous protocol" hints in the user's message and
-    # surface a clickable load chip in the UI. The actual protocol JSON is
-    # NOT inlined into the SSE event — only meta — so the payload stays small
-    # and the user explicitly opts in by clicking the chip.
+    # surface ALL their stored protocols as clickable load chips in the UI.
+    # The list (capped, ranked by relevance) is also injected into the LLM's
+    # user message as a <previous_protocols> hint so the model acknowledges
+    # them rather than gaslighting the user with "no protocol exists".
     protocol_matches: list[dict] = []
     if query_mentions_previous_protocol(latest_query):
         user_id = (identity.get("user_id") or "anonymous").strip() or "anonymous"
         try:
             protocol_matches = match_query_to_entry(
-                history_paths, user_id, latest_query, top_n=3,
+                history_paths, user_id, latest_query, top_n=10,
             )
         except Exception:  # pragma: no cover - history is best-effort
             logger.exception("Failed to match previous protocols for chat hint")
@@ -211,6 +212,7 @@ async def chat_stream(
             async for token in generate_chat_stream(
                 llm, history, retrieved,
                 landscape=landscape, aliases=aliases, examples=examples,
+                previous_protocols=protocol_matches,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"
