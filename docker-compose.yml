@@ -5,7 +5,10 @@ services:
     environment:
       - CSV_PATH=/app/data/Breast_Cancer-RECRUITING-phase2-625.csv
     volumes:
-      - ./data:/app/data:ro
+      # Mount the backend data dir so the trial CSV and embeddings cache are
+      # both available inside the container. Read-write so the Voyage cache
+      # can persist new chunks across restarts.
+      - ./backend/data:/app/data
     ports:
       - "8000:8000"
     healthcheck:
