@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=18">
+    <link rel="stylesheet" href="styles.css?v=19">
 </head>
 <body>
     <header>
@@ -21,6 +21,12 @@
             </p>
 
             <div id="planner-messages" class="chat-messages"></div>
+
+            <!-- Recent protocols strip — populated from /api/protocols. Hidden when empty. -->
+            <div id="planner-recent-protocols" class="recent-protocols hidden">
+                <div class="recent-protocols-label">Recent protocols:</div>
+                <div id="planner-recent-protocols-list" class="recent-protocols-list"></div>
+            </div>
 
             <div class="input-group">
                 <textarea id="planner-input" placeholder="e.g. 'Show me Phase 2 CDK4/6 trials for HR+/HER2- metastatic breast cancer', then follow up with design questions." rows="2"></textarea>
@@ -129,6 +135,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=21"></script>
 </body>
 </html>

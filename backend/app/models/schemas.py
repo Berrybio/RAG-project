@@ -63,6 +63,11 @@ class ProtocolRequest(BaseModel):
 class ProtocolResponse(BaseModel):
     protocol: dict
     reference_trials: list[SourceDoc]
+    # Set when the protocol was auto-saved to history; lets the frontend
+    # tag subsequent refinements with the same id so versions accumulate.
+    protocol_id: str = ""
+    version: int = 0
+    title: str = ""
 
 
 class DocxRequest(BaseModel):
@@ -78,12 +83,17 @@ class RefineProtocolRequest(BaseModel):
     protocol: dict
     refinement_messages: list[RefinementMessage]
     original_summary: str = ""
+    # Optional: id from the initial generation. When present, the refinement
+    # is appended as a new version under the same history entry.
+    protocol_id: str = ""
 
 
 class RefineProtocolResponse(BaseModel):
     protocol: dict
     assistant_message: str
     changed_fields: list[str]
+    protocol_id: str = ""
+    version: int = 0
 
 
 class HealthResponse(BaseModel):
@@ -151,3 +161,34 @@ class AliasesResponse(BaseModel):
 
 class FeedbackStatusUpdate(BaseModel):
     status: Literal["open", "resolved", "dismissed"]
+
+
+# ---------------------------------------------------------------------------
+# Protocol history
+# ---------------------------------------------------------------------------
+
+class ProtocolEntry(BaseModel):
+    """Lightweight metadata row for a stored protocol — what the history
+    strip in the UI renders. Full protocol JSON loads on demand."""
+    id: str
+    title: str
+    phase: str = ""
+    conditions: str = ""
+    study_design: str = ""
+    intervention_name: str = ""
+    summary_brief: str = ""
+    source_nct_ids: list[str] = Field(default_factory=list)
+    version_count: int = 1
+    created_at: str
+    last_modified: str
+
+
+class ProtocolListResponse(BaseModel):
+    protocols: list[ProtocolEntry]
+
+
+class ProtocolLoadResponse(BaseModel):
+    """Returned when a stored protocol + meta are loaded for editing."""
+    protocol: dict
+    meta: ProtocolEntry
+    version: int

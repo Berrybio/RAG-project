@@ -199,9 +199,14 @@ const plannerState = {
   protocolVersions: [],    // [{label, protocol, userRequest, assistantNote, changedFields, timestamp}]
   activeVersion: -1,
   refineMessages: [],      // [{role:'user'|'assistant', content:string}] for /protocol/refine
+  // Server-side id from /api/protocol/json — passed with each refinement so
+  // versions accumulate on the backend in the same history entry.
+  activeProtocolId: "",
 };
 
 const plannerEls = () => ({
+  recentBar: document.getElementById("planner-recent-protocols"),
+  recentList: document.getElementById("planner-recent-protocols-list"),
   messagesBox: document.getElementById("planner-messages"),
   input: document.getElementById("planner-input"),
   sendBtn: document.getElementById("planner-send-btn"),
@@ -239,6 +244,122 @@ function addChatMessage(role, content) {
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
   return div;
+}
+
+// ---- Recent protocols (history strip) -------------------------------------
+
+function formatRelativeTime(iso) {
+  if (!iso) return "";
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return "";
+  const diff = Date.now() - ts;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.round(hr / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+async function refreshRecentProtocols(maxToShow = 6) {
+  const e = plannerEls();
+  if (!e.recentBar || !e.recentList) return;
+  try {
+    const resp = await apiFetch(`${API_BASE}/protocols`);
+    if (!resp.ok) throw new Error(`/protocols ${resp.status}`);
+    const data = await resp.json();
+    const rows = (data.protocols || []).slice(0, maxToShow);
+    e.recentList.innerHTML = "";
+    if (rows.length === 0) {
+      e.recentBar.classList.add("hidden");
+      return;
+    }
+    rows.forEach((entry) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "recent-protocols-chip";
+      const title = document.createElement("span");
+      title.textContent = entry.title || "Untitled";
+      chip.appendChild(title);
+      const meta = document.createElement("span");
+      meta.className = "recent-protocols-chip-meta";
+      const versionPart = entry.version_count > 1 ? `v${entry.version_count} · ` : "";
+      meta.textContent = `· ${versionPart}${formatRelativeTime(entry.last_modified || entry.created_at)}`;
+      chip.appendChild(meta);
+      chip.title = (entry.summary_brief || "") + "\n" + (entry.intervention_name || "");
+      chip.addEventListener("click", () => loadProtocolFromHistory(entry.id));
+      e.recentList.appendChild(chip);
+    });
+    e.recentBar.classList.remove("hidden");
+  } catch (err) {
+    // Don't toast on the strip — it's optional UX. Just hide it.
+    console.warn("Failed to load recent protocols:", err);
+    e.recentBar.classList.add("hidden");
+  }
+}
+
+async function loadProtocolFromHistory(protocolId) {
+  if (!protocolId) return;
+  try {
+    const resp = await apiFetch(`${API_BASE}/protocols/${encodeURIComponent(protocolId)}`);
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    const protocol = data.protocol;
+    const meta = data.meta || {};
+    plannerState.currentProtocol = protocol;
+    plannerState.activeProtocolId = meta.id || protocolId;
+    plannerState.protocolVersions = [{
+      label: `v${data.version || meta.version_count || 1} (loaded)`,
+      protocol,
+      userRequest: null,
+      assistantNote: `Loaded from history: ${meta.title || "(no title)"}`,
+      changedFields: [],
+      timestamp: meta.last_modified || meta.created_at || new Date().toISOString(),
+    }];
+    plannerState.activeVersion = 0;
+    plannerState.refineMessages = [];
+    plannerState.lastSummary = meta.summary_brief || plannerState.lastSummary;
+    const e = plannerEls();
+    if (e.refineThread) e.refineThread.innerHTML = "";
+    renderVersionBar();
+    renderProtocolPreview(protocol, "planner-protocol-preview");
+    e.protocolResult.classList.remove("hidden");
+    e.protocolResult.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`Loaded: ${meta.title || "protocol"}`);
+  } catch (err) {
+    showToast(`Failed to load protocol: ${err.message}`, "error");
+  }
+}
+
+function attachProtocolMatchBar(messageDiv, matches) {
+  if (!matches || matches.length === 0) return;
+  const bar = document.createElement("div");
+  bar.className = "protocol-match-bar";
+  const label = document.createElement("span");
+  label.className = "protocol-match-bar-label";
+  label.textContent =
+    matches.length === 1
+      ? "I found a previously generated protocol — load it to edit?"
+      : `Found ${matches.length} matching protocols — pick one to load:`;
+  bar.appendChild(label);
+  matches.forEach((entry) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "recent-protocols-chip";
+    const title = document.createElement("span");
+    title.textContent = entry.title || "Untitled";
+    chip.appendChild(title);
+    const meta = document.createElement("span");
+    meta.className = "recent-protocols-chip-meta";
+    const versionPart = entry.version_count > 1 ? `v${entry.version_count} · ` : "";
+    meta.textContent = `· ${versionPart}${formatRelativeTime(entry.last_modified || entry.created_at)}`;
+    chip.appendChild(meta);
+    chip.addEventListener("click", () => loadProtocolFromHistory(entry.id));
+    bar.appendChild(chip);
+  });
+  messageDiv.appendChild(bar);
 }
 
 // Map raw enum-style filter values to clinician-friendly labels.
@@ -586,6 +707,7 @@ function resetPlanner() {
   plannerState.protocolVersions = [];
   plannerState.activeVersion = -1;
   plannerState.refineMessages = [];
+  plannerState.activeProtocolId = "";
   const e = plannerEls();
   e.messagesBox.innerHTML = "";
   e.summarizeBtn.classList.add("hidden");
@@ -617,6 +739,7 @@ async function plannerSend() {
   let assistantText = "";
   let finished = false;
   let streamSources = [];
+  let protocolMatches = [];
 
   try {
     const resp = await apiFetch(`${API_BASE}/chat/stream`, {
@@ -664,6 +787,8 @@ async function plannerSend() {
           } catch {}
         } else if (evt === "sources") {
           try { streamSources = JSON.parse(data); } catch { streamSources = []; }
+        } else if (evt === "protocol_match") {
+          try { protocolMatches = JSON.parse(data); } catch { protocolMatches = []; }
         } else if (evt === "token") {
           try {
             assistantText += JSON.parse(data);
@@ -707,6 +832,7 @@ async function plannerSend() {
     attachSourcesToMessage(assistantDiv, streamSources);
     attachChoicesToMessage(assistantDiv, choices);
     attachFeedbackBar(assistantDiv, assistantText, streamSources);
+    attachProtocolMatchBar(assistantDiv, protocolMatches);
     revealPlannerActions();
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
@@ -765,6 +891,7 @@ async function plannerGenerateProtocol() {
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
     plannerState.currentProtocol = data.protocol;
+    plannerState.activeProtocolId = data.protocol_id || "";
     plannerState.protocolVersions = [{
       label: "v1 (original)",
       protocol: data.protocol,
@@ -779,6 +906,8 @@ async function plannerGenerateProtocol() {
     if (e.refineThread) e.refineThread.innerHTML = "";
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
+    // Refresh the recent-protocols strip since a new entry was just saved.
+    refreshRecentProtocols();
   } catch (err) {
     alert(`Failed to generate protocol: ${err.message}`);
   } finally {
@@ -867,6 +996,7 @@ async function plannerSendRefinement() {
         protocol: plannerState.currentProtocol,
         refinement_messages: plannerState.refineMessages,
         original_summary: plannerState.lastSummary,
+        protocol_id: plannerState.activeProtocolId || "",
       }),
     });
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
@@ -893,8 +1023,11 @@ async function plannerSendRefinement() {
     });
     plannerState.activeVersion = plannerState.protocolVersions.length - 1;
     plannerState.currentProtocol = data.protocol;
+    if (data.protocol_id) plannerState.activeProtocolId = data.protocol_id;
     renderVersionBar();
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
+    // Refresh history strip — version_count + last_modified just changed.
+    refreshRecentProtocols();
   } catch (err) {
     pendingDiv.remove();
     appendRefineMessage("assistant", `Failed to apply correction: ${err.message}`, []);
@@ -1393,4 +1526,8 @@ function adminInit() {
 
   // Initialize the admin panel if ?admin=1 is in the URL.
   adminInit();
+
+  // Populate the recent-protocols strip on page load. Best-effort: failures
+  // are logged but not toasted (the strip is auxiliary, not blocking).
+  refreshRecentProtocols();
 })();
