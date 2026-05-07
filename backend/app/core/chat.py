@@ -23,7 +23,16 @@ CHAT_SYSTEM_PROMPT = """\
 You are a clinical trials research assistant helping a clinician plan a breast cancer trial.
 
 You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn may \
-include two distinct context blocks:
+include three distinct context blocks:
+
+- <previous_protocols>: when present, the user has prior protocols stored and is asking to \
+work on one. The block lists each protocol by title, version, phase, and population. Your \
+reply MUST acknowledge the listed protocol(s) by name — never say "I don't see any \
+previous protocol" or "no protocol history" when this block is present. Tell the user \
+their protocols are loaded as clickable chips below your reply and that clicking one \
+opens it for refinement. Do NOT regenerate the protocol contents inline; the chip is the \
+loading mechanism. Keep this acknowledgement brief (2-3 sentences) and DO NOT emit \
+[CHOICES] — the chips already serve as the picker.
 
 - <landscape>: deterministic aggregate statistics over the FULL matching population (total \
 trial count, status distribution, drug-class / modality counts). When the user asks \
@@ -133,12 +142,57 @@ Write in plain prose, not bullet points. Do not invent details. Finish by asking
 """
 
 
+def _format_previous_protocols_block(entries: list[dict]) -> str:
+    """Render a hint block about previously generated protocols for the LLM.
+
+    The actual protocol JSON isn't inlined — too many tokens, and the user
+    will pick one via the load chip the frontend renders alongside this
+    reply. The LLM just needs to know the protocols *exist* and what their
+    titles are, so it doesn't gaslight the user with "I don't see any."
+    """
+    if not entries:
+        return ""
+    lines = [
+        f"The user has {len(entries)} previously generated protocol"
+        f"{'s' if len(entries) != 1 else ''} stored. "
+        "The frontend is rendering load chips alongside your reply so the user "
+        "can click to open one for refinement.",
+    ]
+    for i, e in enumerate(entries, 1):
+        title = e.get("title") or "Untitled"
+        phase = e.get("phase") or ""
+        conds = e.get("conditions") or ""
+        bits = [f"v{e.get('version_count', 1)}"]
+        if phase:
+            bits.append(phase)
+        if conds:
+            bits.append(conds[:80])
+        lines.append(f"{i}. {title} ({', '.join(bits)})")
+    lines.append(
+        "Your reply: acknowledge the available protocol(s) by name, briefly say "
+        "what you'll help refine, and tell the user to click the matching chip "
+        "below to load it. Do NOT claim the protocol does not exist or that "
+        "there is no protocol history — they are listed above. Do NOT regenerate "
+        "the protocol contents inline."
+    )
+    return "\n".join(lines)
+
+
 def _augment_with_context(
     user_content: str,
     retrieved_docs: list[dict],
     landscape: dict | None = None,
+    previous_protocols: list[dict] | None = None,
 ) -> str:
     parts: list[str] = []
+
+    if previous_protocols:
+        # Place the previous-protocols hint FIRST — when the user explicitly
+        # asked about a prior protocol, that intent should anchor the reply,
+        # not the trial list (which the planner will retrieve anyway).
+        block = _format_previous_protocols_block(previous_protocols)
+        if block:
+            parts.append(f"<previous_protocols>\n{block}\n</previous_protocols>")
 
     if landscape:
         landscape_text = format_landscape_for_llm(landscape)
@@ -168,6 +222,7 @@ async def generate_chat_stream(
     landscape: dict | None = None,
     aliases: dict[str, str] | None = None,
     examples: FeedbackExampleStore | None = None,
+    previous_protocols: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
@@ -179,6 +234,11 @@ async def generate_chat_stream(
     `examples` is the up-voted few-shot store; the most similar past
     (question, answer) pair is appended to the system prompt to anchor the
     reply structure on what the user has already endorsed.
+    `previous_protocols` (when provided) is the list of stored protocols
+    matched to the user's NL hint ("based on the previous protocol", etc.).
+    Their meta is injected into the user message as a hint block so the LLM
+    knows to acknowledge them rather than gaslight the user with "no
+    protocol exists."
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Chat history must end with a user message")
@@ -186,7 +246,12 @@ async def generate_chat_stream(
     augmented = list(messages)
     augmented[-1] = {
         "role": "user",
-        "content": _augment_with_context(messages[-1]["content"], retrieved_docs, landscape),
+        "content": _augment_with_context(
+            messages[-1]["content"],
+            retrieved_docs,
+            landscape,
+            previous_protocols,
+        ),
     }
 
     system_prompt = CHAT_SYSTEM_PROMPT
