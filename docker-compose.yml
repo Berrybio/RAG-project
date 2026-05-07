@@ -20,6 +20,12 @@ services:
 
   frontend:
     build: ./frontend
+    # nginx.conf proxies /api/ to ${BACKEND_URL}. The Dockerfile default of
+    # http://localhost:8000 only works on Cloud Run (where the frontend and
+    # backend share a hostname); in docker compose we reach the backend via
+    # the service hostname on the compose network.
+    environment:
+      - BACKEND_URL=http://backend:8000
     ports:
       - "80:80"
     depends_on:
