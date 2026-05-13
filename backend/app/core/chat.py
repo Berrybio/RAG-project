@@ -23,7 +23,18 @@ CHAT_SYSTEM_PROMPT = """\
 You are a clinical trials research assistant helping a clinician plan a breast cancer trial.
 
 You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn may \
-include three distinct context blocks:
+include up to four distinct context blocks:
+
+- <active_protocol>: when present, the user has a protocol currently open in the planner UI \
+and the block summarizes it (title, phase, conditions, design, intervention, comparator, \
+sample size, primary objectives/endpoints, eligibility excerpts). Use it to answer \
+*questions about* the protocol — sample-size sanity, endpoint choice, eligibility \
+boundaries, comparator rationale — without asking the user to paste it back. If the user \
+asks you to *change* anything about the protocol, do NOT write the rewritten protocol \
+inline; instead respond briefly that you can apply the change via the refinement flow \
+and tell the user to phrase it as feedback (e.g. "here's the feedback: …") or a direct \
+edit instruction ("change the comparator to …"). The client-side heuristic routes those \
+phrasings to the refinement endpoint automatically.
 
 - <previous_protocols>: when present, the user has prior protocols stored and is asking to \
 work on one. The block lists each protocol by title, version, phase, and population. Your \
@@ -142,6 +153,68 @@ Write in plain prose, not bullet points. Do not invent details. Finish by asking
 """
 
 
+def _format_active_protocol_block(meta: dict, protocol: dict | None) -> str:
+    """Render a compact summary of the protocol the user currently has open.
+
+    Surfaces title, phase, conditions, design, intervention, sample size, and
+    primary endpoint(s) — enough to answer most clarification questions ("is
+    our sample size reasonable?", "what's the current comparator?") without
+    pasting the full JSON. The full JSON would balloon the context window for
+    a small win since the planner rarely needs every field at once.
+    """
+    if not meta and not protocol:
+        return ""
+    src = protocol or {}
+    title = meta.get("title") if meta else src.get("title", "")
+    phase = src.get("phase") or (meta.get("phase") if meta else "") or ""
+    conditions = src.get("conditions") or (meta.get("conditions") if meta else "") or ""
+    design = src.get("study_design") or ""
+    intervention = src.get("intervention_name") or ""
+    comparator = src.get("comparator") or ""
+    enrollment = src.get("estimated_enrollment")
+    primary_endpoints = src.get("primary_endpoints") or []
+    primary_objectives = src.get("primary_objectives") or []
+    inclusion = src.get("inclusion_criteria") or []
+    exclusion = src.get("exclusion_criteria") or []
+
+    lines = [f"The user has an active protocol open in the planner: {title}"]
+    if phase:
+        lines.append(f"- Phase: {phase}")
+    if conditions:
+        lines.append(f"- Conditions: {conditions}")
+    if design:
+        lines.append(f"- Study design: {design}")
+    if intervention:
+        lines.append(f"- Intervention: {intervention}")
+    if comparator:
+        lines.append(f"- Comparator: {comparator}")
+    if enrollment:
+        lines.append(f"- Estimated enrollment: {enrollment}")
+    if primary_objectives:
+        items = "; ".join(str(x) for x in primary_objectives[:3])
+        lines.append(f"- Primary objectives: {items}")
+    if primary_endpoints:
+        items = "; ".join(str(x) for x in primary_endpoints[:3])
+        lines.append(f"- Primary endpoints: {items}")
+    if inclusion:
+        items = "; ".join(str(x) for x in inclusion[:4])
+        suffix = "" if len(inclusion) <= 4 else f" ({len(inclusion)} total)"
+        lines.append(f"- Inclusion criteria{suffix}: {items}")
+    if exclusion:
+        items = "; ".join(str(x) for x in exclusion[:4])
+        suffix = "" if len(exclusion) <= 4 else f" ({len(exclusion)} total)"
+        lines.append(f"- Exclusion criteria{suffix}: {items}")
+    lines.append(
+        "If the user asks questions about this protocol (sample size sanity, "
+        "endpoint choice, eligibility), answer using the fields above. If "
+        "they want to *change* the protocol they should phrase it as feedback "
+        '("here\'s the feedback…") or a direct edit instruction; that triggers '
+        "the refinement flow on the client side and you don't need to write "
+        "the change inline."
+    )
+    return "\n".join(lines)
+
+
 def _format_previous_protocols_block(entries: list[dict]) -> str:
     """Render a hint block about previously generated protocols for the LLM.
 
@@ -183,8 +256,20 @@ def _augment_with_context(
     retrieved_docs: list[dict],
     landscape: dict | None = None,
     previous_protocols: list[dict] | None = None,
+    active_protocol_meta: dict | None = None,
+    active_protocol_json: dict | None = None,
 ) -> str:
     parts: list[str] = []
+
+    if active_protocol_meta or active_protocol_json:
+        # Active protocol block goes first — it's the strongest context cue
+        # ("the user has THIS protocol open right now") and should anchor the
+        # reply when the user asks clarification or refinement questions.
+        block = _format_active_protocol_block(
+            active_protocol_meta or {}, active_protocol_json,
+        )
+        if block:
+            parts.append(f"<active_protocol>\n{block}\n</active_protocol>")
 
     if previous_protocols:
         # Place the previous-protocols hint FIRST — when the user explicitly
@@ -223,6 +308,8 @@ async def generate_chat_stream(
     aliases: dict[str, str] | None = None,
     examples: FeedbackExampleStore | None = None,
     previous_protocols: list[dict] | None = None,
+    active_protocol_meta: dict | None = None,
+    active_protocol_json: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
@@ -251,6 +338,8 @@ async def generate_chat_stream(
             retrieved_docs,
             landscape,
             previous_protocols,
+            active_protocol_meta=active_protocol_meta,
+            active_protocol_json=active_protocol_json,
         ),
     }
 

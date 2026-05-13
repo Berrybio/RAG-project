@@ -198,7 +198,6 @@ const plannerState = {
   // used for downloads.
   protocolVersions: [],    // [{label, protocol, userRequest, assistantNote, changedFields, timestamp}]
   activeVersion: -1,
-  refineMessages: [],      // [{role:'user'|'assistant', content:string}] for /protocol/refine
   // Server-side id from /api/protocol/json — passed with each refinement so
   // versions accumulate on the backend in the same history entry.
   activeProtocolId: "",
@@ -226,9 +225,6 @@ const plannerEls = () => ({
   downloadPdfBtn: document.getElementById("planner-download-pdf-btn"),
   versionList: document.getElementById("planner-version-list"),
   compareBtn: document.getElementById("planner-compare-btn"),
-  refineThread: document.getElementById("planner-refine-thread"),
-  refineInput: document.getElementById("planner-refine-input"),
-  refineSendBtn: document.getElementById("planner-refine-send-btn"),
   diffModal: document.getElementById("planner-diff-modal"),
   diffFrom: document.getElementById("planner-diff-from"),
   diffTo: document.getElementById("planner-diff-to"),
@@ -319,10 +315,8 @@ async function loadProtocolFromHistory(protocolId) {
       timestamp: meta.last_modified || meta.created_at || new Date().toISOString(),
     }];
     plannerState.activeVersion = 0;
-    plannerState.refineMessages = [];
     plannerState.lastSummary = meta.summary_brief || plannerState.lastSummary;
     const e = plannerEls();
-    if (e.refineThread) e.refineThread.innerHTML = "";
     renderVersionBar();
     renderProtocolPreview(protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
@@ -706,7 +700,6 @@ function resetPlanner() {
   plannerState.currentProtocol = null;
   plannerState.protocolVersions = [];
   plannerState.activeVersion = -1;
-  plannerState.refineMessages = [];
   plannerState.activeProtocolId = "";
   const e = plannerEls();
   e.messagesBox.innerHTML = "";
@@ -715,8 +708,6 @@ function resetPlanner() {
   e.protocolLoading.classList.add("hidden");
   e.protocolResult.classList.add("hidden");
   e.input.value = "";
-  if (e.refineThread) e.refineThread.innerHTML = "";
-  if (e.refineInput) e.refineInput.value = "";
   if (e.versionList) e.versionList.innerHTML = "";
   if (e.compareBtn) e.compareBtn.disabled = true;
 }
@@ -732,10 +723,24 @@ async function plannerSend() {
   e.sendBtn.disabled = true;
   e.sendBtn.textContent = "Thinking...";
 
-  // Create assistant bubble to stream into
+  // Create assistant bubble (used for either streamed chat or in-place refinement)
   const assistantDiv = addChatMessage("assistant", "");
   const contentNode = document.createTextNode("");
   assistantDiv.appendChild(contentNode);
+
+  // If a protocol is active AND the user's message looks like feedback / a
+  // refinement request, route to the refine endpoint instead of chat/stream.
+  // The refine response is rendered inline in the same assistant bubble.
+  if (isRefinementIntent(query)) {
+    try {
+      await applyRefinementInChat(query, assistantDiv, contentNode);
+    } finally {
+      e.sendBtn.disabled = false;
+      e.sendBtn.textContent = "Send";
+    }
+    return;
+  }
+
   let assistantText = "";
   let finished = false;
   let streamSources = [];
@@ -749,6 +754,11 @@ async function plannerSend() {
         messages: plannerState.messages,
         top_k: parseInt(e.topk.value),
         include_landscape: e.showLandscape.checked,
+        // Active protocol context: when set, the backend injects a brief
+        // <active_protocol> hint into the system context so the model can
+        // answer questions about the open protocol without the user having
+        // to paste it back into chat.
+        active_protocol_id: plannerState.activeProtocolId || "",
       }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
@@ -901,9 +911,7 @@ async function plannerGenerateProtocol() {
       timestamp: new Date().toISOString(),
     }];
     plannerState.activeVersion = 0;
-    plannerState.refineMessages = [];
     renderVersionBar();
-    if (e.refineThread) e.refineThread.innerHTML = "";
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
     // Refresh the recent-protocols strip since a new entry was just saved.
@@ -955,46 +963,78 @@ function switchToVersion(idx) {
   renderProtocolPreview(versions[idx].protocol, "planner-protocol-preview");
 }
 
-function appendRefineMessage(role, content, changedFields) {
-  const e = plannerEls();
-  const div = document.createElement("div");
-  div.className = `refine-msg ${role}`;
-  div.textContent = content;
-  if (role === "assistant" && changedFields && changedFields.length) {
-    const note = document.createElement("div");
-    note.className = "changed-fields";
-    note.textContent = `Changed: ${changedFields.join(", ")}`;
-    div.appendChild(note);
-  }
-  e.refineThread.appendChild(div);
-  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+// Heuristic: when a protocol is active, decide whether the user's message is
+// (a) feedback / a refinement request to apply, or (b) a normal trial-related
+// question. Recognised patterns:
+//   • Explicit feedback / review language ("here's the feedback", "reviewer
+//     comments", "peer review").
+//   • Refinement verb + protocol-section noun ("change/modify/update the
+//     inclusion criteria", "tighten the sample size justification").
+//   • Imperatives anchored on a known protocol section ("the comparator
+//     should be pembrolizumab", "set sample size to 200").
+// Returns false when no protocol is loaded — in pure trial-search mode the
+// chat planner answers normally.
+function isRefinementIntent(text) {
+  if (!plannerState.currentProtocol) return false;
+  const lower = (text || "").toLowerCase();
+  if (!lower) return false;
+
+  // Strong: explicit feedback / review language.
+  const strong = [
+    /\bhere'?s? (the |some |my |our |peer |reviewer'?s? )?feedback\b/,
+    /\b(apply|here is|got|received|attaching) (the |this |some |my |our )?feedback\b/,
+    /\bfeedback (on|for|about) (the |my |our |this )?(protocol|report|draft|design)\b/,
+    /\breviewer'?s? (comments|says|wrote|notes|suggests|recommend)/,
+    /\b(peer|external|llm) review\b/,
+    /\bfrom (the |another )?reviewer\b/,
+    /\bcomments? on (the |my |our |this )?(protocol|report|draft)\b/,
+    /\bincorporate (the |this |these |peer )?(feedback|comments?|review)\b/,
+  ];
+  if (strong.some((re) => re.test(lower))) return true;
+
+  // Moderate: refinement verb against a protocol-section noun.
+  const verb = /\b(change|modify|update|revise|edit|fix|tighten|loosen|swap|replace|add|remove|delete|drop|increase|decrease|reduce|expand|adjust|rephrase|rewrite|amend)\b/;
+  const noun = /\b(protocol|report|draft|inclusion criteri|exclusion criteri|sample size|primary endpoint|secondary endpoint|primary objective|secondary objective|exploratory objective|study design|study schema|intervention|comparator|control arm|sponsor|sex|age|dose|schedule|enrollment|criterion|criteria|arm|treatment|monitoring|adverse|endpoint|justification|locations?)\b/;
+  if (verb.test(lower) && noun.test(lower)) return true;
+
+  // Imperative directives anchored on a protocol section.
+  if (/\b(should|must|need to) (be|have|use|include|exclude|require) /.test(lower) && noun.test(lower)) return true;
+  if (/\bset (the )?(sample size|enrollment|n|inclusion|exclusion|primary endpoint|comparator)\b/.test(lower)) return true;
+
+  return false;
 }
 
-async function plannerSendRefinement() {
-  const e = plannerEls();
-  const text = e.refineInput.value.trim();
-  if (!text || !plannerState.currentProtocol) return;
+// Stream-like UX even though /api/protocol/refine is sync: while the request
+// is in flight the assistant bubble shows a "working" message, then we replace
+// it with the assistant_message + a green "Changes applied" bar listing the
+// changed fields. Preview + version chips update inline.
+async function applyRefinementInChat(userText, assistantDiv, contentNode) {
+  if (!plannerState.currentProtocol) {
+    // Shouldn't happen — caller already gated on isRefinementIntent which
+    // requires a current protocol — but defend anyway.
+    const msg = "I don't have an active protocol to refine. Generate one first via the planner summary flow.";
+    contentNode.nodeValue = msg;
+    plannerState.messages.push({ role: "assistant", content: msg });
+    return;
+  }
 
-  appendRefineMessage("user", text);
-  plannerState.refineMessages.push({ role: "user", content: text });
-  e.refineInput.value = "";
-  e.refineSendBtn.disabled = true;
-  e.refineSendBtn.textContent = "Updating...";
-
-  // Show a placeholder assistant bubble that we'll replace once the response lands.
-  const pendingDiv = document.createElement("div");
-  pendingDiv.className = "refine-msg assistant";
-  pendingDiv.textContent = "Updating the protocol...";
-  e.refineThread.appendChild(pendingDiv);
-  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+  contentNode.nodeValue = "Applying changes to the protocol…";
 
   try {
+    // Build the refine API's message list from the planner conversation so
+    // the model sees the dialogue context, not just this single turn.
+    const refineMessages = plannerState.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+    // The user's current request was already pushed onto plannerState.messages
+    // by the caller, so it's the last entry of refineMessages.
+
     const resp = await apiFetch(`${API_BASE}/protocol/refine`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         protocol: plannerState.currentProtocol,
-        refinement_messages: plannerState.refineMessages,
+        refinement_messages: refineMessages,
         original_summary: plannerState.lastSummary,
         protocol_id: plannerState.activeProtocolId || "",
       }),
@@ -1002,21 +1042,19 @@ async function plannerSendRefinement() {
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
 
-    // Replace pending bubble with the real assistant note + changed-fields tag.
-    pendingDiv.remove();
     const note = data.assistant_message
       || (data.changed_fields && data.changed_fields.length
             ? `Updated ${data.changed_fields.join(", ")}.`
             : "Protocol updated.");
-    appendRefineMessage("assistant", note, data.changed_fields || []);
-    plannerState.refineMessages.push({ role: "assistant", content: note });
+    contentNode.nodeValue = note;
+    plannerState.messages.push({ role: "assistant", content: note });
 
     // Append a new version and switch to it.
     const nextNum = plannerState.protocolVersions.length + 1;
     plannerState.protocolVersions.push({
       label: `v${nextNum}`,
       protocol: data.protocol,
-      userRequest: text,
+      userRequest: userText,
       assistantNote: note,
       changedFields: data.changed_fields || [],
       timestamp: new Date().toISOString(),
@@ -1026,17 +1064,33 @@ async function plannerSendRefinement() {
     if (data.protocol_id) plannerState.activeProtocolId = data.protocol_id;
     renderVersionBar();
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
-    // Refresh history strip — version_count + last_modified just changed.
     refreshRecentProtocols();
+
+    // Attach a green "Changes applied" bar showing which fields changed +
+    // the new version label, so the chat surface tells the same story as the
+    // version chips above.
+    attachAppliedBar(assistantDiv, data.changed_fields || [], `v${nextNum}`);
   } catch (err) {
-    pendingDiv.remove();
-    appendRefineMessage("assistant", `Failed to apply correction: ${err.message}`, []);
-    // Pop the user message off the refine history so retrying doesn't re-send it.
-    plannerState.refineMessages.pop();
-  } finally {
-    e.refineSendBtn.disabled = false;
-    e.refineSendBtn.textContent = "Send correction";
+    const msg = `Failed to apply changes: ${err.message}`;
+    contentNode.nodeValue = msg;
+    plannerState.messages.push({ role: "assistant", content: msg });
   }
+}
+
+function attachAppliedBar(messageDiv, changedFields, versionLabel) {
+  const bar = document.createElement("div");
+  bar.className = "protocol-applied-bar";
+  const label = document.createElement("div");
+  label.className = "protocol-applied-bar-label";
+  label.textContent = `Changes applied — new version ${versionLabel} is now active. Scroll up to see the updated protocol.`;
+  bar.appendChild(label);
+  if (changedFields && changedFields.length) {
+    const list = document.createElement("div");
+    list.className = "protocol-applied-bar-changes";
+    list.textContent = `Modified fields: ${changedFields.join(", ")}`;
+    bar.appendChild(list);
+  }
+  messageDiv.appendChild(bar);
 }
 
 // ===================== VERSION DIFF =====================
@@ -1503,18 +1557,8 @@ function adminInit() {
     }
   });
 
-  // Refinement panel + version controls
-  if (e.refineSendBtn) {
-    e.refineSendBtn.addEventListener("click", plannerSendRefinement);
-  }
-  if (e.refineInput) {
-    e.refineInput.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter" && !evt.shiftKey) {
-        evt.preventDefault();
-        plannerSendRefinement();
-      }
-    });
-  }
+  // Version controls (refinement now happens inline in the main planner chat
+  // — see plannerSend / applyRefinementInChat — so no dedicated refine input).
   if (e.compareBtn) e.compareBtn.addEventListener("click", openDiffModal);
   if (e.diffCloseBtn) e.diffCloseBtn.addEventListener("click", closeDiffModal);
   if (e.diffModal) {

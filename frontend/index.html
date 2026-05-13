@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=19">
+    <link rel="stylesheet" href="styles.css?v=20">
 </head>
 <body>
     <header>
@@ -72,22 +72,12 @@
                     <button id="planner-download-pdf-btn" class="secondary-btn">Download as PDF</button>
                 </div>
                 <div id="planner-protocol-preview"></div>
-
-                <div id="planner-refine-section" class="refine-section">
-                    <h3>Refine the report</h3>
-                    <p class="refine-intro">
-                        Spotted something wrong? Tell the assistant what to correct
-                        (e.g. <em>"the control arm should be pembrolizumab monotherapy, not chemotherapy"</em>)
-                        and it will update the protocol. Each correction creates a new version you can compare against.
-                    </p>
-                    <div id="planner-refine-thread" class="refine-thread"></div>
-                    <div class="input-group">
-                        <textarea id="planner-refine-input" placeholder="Describe the correction..." rows="2"></textarea>
-                        <div class="controls">
-                            <button id="planner-refine-send-btn" class="primary-btn">Send correction</button>
-                        </div>
-                    </div>
-                </div>
+                <p class="protocol-refine-hint">
+                    To refine, paste peer / LLM feedback or describe a change directly in the chat above
+                    (e.g. <em>"here's the feedback of the protocol: ..."</em> or
+                    <em>"change the inclusion criteria to require ECOG 0-1"</em>).
+                    Each change creates a new version you can compare against.
+                </p>
             </div>
 
             <!-- Compare-versions modal -->
@@ -135,6 +125,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=21"></script>
+    <script src="app.js?v=22"></script>
 </body>
 </html>
