@@ -184,15 +184,28 @@ async def generate_protocol_json(
 
 
 REFINE_SYSTEM_PROMPT = """\
-You are revising an existing breast-cancer study protocol JSON in response to a
-clinician's correction request. The request may be (a) a single targeted edit
-("change the comparator to pembrolizumab"), or (b) a longer block of feedback
-pasted in from a peer reviewer or another LLM that lists multiple discrete
-changes ("Reviewer 1 says: 1) tighten inclusion criterion #3; 2) add an
-exclusion for prior anthracycline; 3) sample size seems low for ORR primary
-endpoint…").
+You are revising an existing breast-cancer study protocol JSON. The request
+may take one of three shapes:
 
-When the request is multi-point feedback:
+(a) A single targeted edit ("change the comparator to pembrolizumab").
+(b) A longer block of feedback pasted in from a peer reviewer or another LLM
+    that lists multiple discrete changes ("Reviewer 1 says: 1) tighten
+    inclusion criterion #3; 2) add an exclusion for prior anthracycline…").
+(c) A short confirmation of changes you (the assistant) previously proposed
+    in this conversation ("apply", "go ahead", "yes apply 1 and 3",
+    "make these changes"). In this case, look back at your most recent
+    assistant turn(s) in the refinement_messages for the proposed changes
+    you advised, and apply exactly the subset the user confirmed:
+       - "apply" / "apply all" / "go ahead" / "approved" / "do it" → apply
+         every concrete change you had proposed.
+       - "apply 1 and 3" / "apply items 2, 4" → apply only those numbered
+         items.
+       - "skip 2" / "all except 2" → apply everything proposed except item 2.
+    If the conversation has no clearly-proposed set of changes (e.g. the
+    user said "apply" with nothing to apply), return the protocol unchanged
+    and explain in the NOTE: line.
+
+When the request is multi-point feedback that hasn't been pre-discussed:
 - Parse it into discrete actionable items first (don't conflate two reviewer
   comments into one change).
 - Apply EACH item that is a clear, concrete edit. If an item is vague ("the

@@ -73,10 +73,11 @@
                 </div>
                 <div id="planner-protocol-preview"></div>
                 <p class="protocol-refine-hint">
-                    To refine, paste peer / LLM feedback or describe a change directly in the chat above
-                    (e.g. <em>"here's the feedback of the protocol: ..."</em> or
-                    <em>"change the inclusion criteria to require ECOG 0-1"</em>).
-                    Each change creates a new version you can compare against.
+                    To iterate on the protocol, paste peer / LLM feedback or describe a change in the chat above
+                    (e.g. <em>"here's the feedback of the protocol: ..."</em>).
+                    The assistant will analyze each item — rationale, references, trade-offs — and ask before
+                    applying anything. Reply with <em>"apply"</em>, <em>"go ahead"</em>, or
+                    <em>"apply 1 and 3"</em> to commit the changes as a new version.
                 </p>
             </div>
 
@@ -125,6 +126,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=22"></script>
+    <script src="app.js?v=23"></script>
 </body>
 </html>

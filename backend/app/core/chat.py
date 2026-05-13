@@ -29,12 +29,31 @@ include up to four distinct context blocks:
 and the block summarizes it (title, phase, conditions, design, intervention, comparator, \
 sample size, primary objectives/endpoints, eligibility excerpts). Use it to answer \
 *questions about* the protocol — sample-size sanity, endpoint choice, eligibility \
-boundaries, comparator rationale — without asking the user to paste it back. If the user \
-asks you to *change* anything about the protocol, do NOT write the rewritten protocol \
-inline; instead respond briefly that you can apply the change via the refinement flow \
-and tell the user to phrase it as feedback (e.g. "here's the feedback: …") or a direct \
-edit instruction ("change the comparator to …"). The client-side heuristic routes those \
-phrasings to the refinement endpoint automatically.
+boundaries, comparator rationale — without asking the user to paste it back.
+
+When the user provides feedback on the protocol (peer-review comments, LLM critique, or \
+a direct edit suggestion), DO NOT auto-apply or rewrite the protocol inline. Your job \
+is to advise first, then ask permission:
+
+  1. Parse the feedback into discrete items.
+  2. For each item, give a brief reasoned assessment: Is it meaningful clinically / \
+methodologically? What's the upside? What's the trade-off or risk? Cite a relevant \
+reference, guideline, or trial precedent when you reasonably can (e.g. "ICH E9 \
+recommends pre-specifying the primary analysis population", "DESTINY-Breast04 used a \
+6-month exposure window for prior anthracycline exclusions"). If you're not sure of a \
+reference, say so honestly rather than inventing one.
+  3. Flag vague items ("the endpoints feel off") and ask for clarification rather \
+than guessing.
+  4. Flag conflicts between reviewers and recommend the safer / more conservative \
+option, but let the user override.
+  5. End the reply with an explicit ask, e.g. *"Would you like me to apply items 1 \
+and 3? You can say 'apply 1 and 3' or 'go ahead'."* Do NOT emit [CHOICES] here — the \
+client recognises natural-language confirmations like "apply", "go ahead", "yes apply", \
+"make these changes" and will trigger the refinement step on the user's confirmation.
+
+If the user replies with one of those confirmation phrases on a subsequent turn, the \
+client routes that message to a separate refinement endpoint — you don't need to apply \
+the changes yourself in this conversation. Stay analytical.
 
 - <previous_protocols>: when present, the user has prior protocols stored and is asking to \
 work on one. The block lists each protocol by title, version, phase, and population. Your \
@@ -207,10 +226,11 @@ def _format_active_protocol_block(meta: dict, protocol: dict | None) -> str:
     lines.append(
         "If the user asks questions about this protocol (sample size sanity, "
         "endpoint choice, eligibility), answer using the fields above. If "
-        "they want to *change* the protocol they should phrase it as feedback "
-        '("here\'s the feedback…") or a direct edit instruction; that triggers '
-        "the refinement flow on the client side and you don't need to write "
-        "the change inline."
+        "they provide feedback or suggest changes, ANALYZE — give a reasoned "
+        "assessment of each item with references where possible, flag vague "
+        "or conflicting items, then ask permission to apply (see the system "
+        "prompt for the format). Do NOT auto-apply; the user's explicit "
+        "confirmation triggers the refinement endpoint client-side."
     )
     return "\n".join(lines)
 

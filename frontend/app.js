@@ -728,10 +728,17 @@ async function plannerSend() {
   const contentNode = document.createTextNode("");
   assistantDiv.appendChild(contentNode);
 
-  // If a protocol is active AND the user's message looks like feedback / a
-  // refinement request, route to the refine endpoint instead of chat/stream.
-  // The refine response is rendered inline in the same assistant bubble.
-  if (isRefinementIntent(query)) {
+  // Two-stage refinement flow:
+  //   1) User pastes feedback or asks for an edit → goes to chat/stream.
+  //      The planner analyzes each item (rationale, references, trade-offs)
+  //      and ends by asking permission to apply.
+  //   2) Only when the user *confirms* with an explicit phrase ("apply",
+  //      "go ahead", "yes apply 1 and 3", etc.) does the client route to
+  //      the refine endpoint — which sees the full conversation including
+  //      the prior assistant proposal and applies the confirmed subset.
+  // This keeps the assistant honest: it never silently rewrites the
+  // protocol; the user is always asked first.
+  if (isApplyConfirmation(query)) {
     try {
       await applyRefinementInChat(query, assistantDiv, contentNode);
     } finally {
@@ -963,45 +970,46 @@ function switchToVersion(idx) {
   renderProtocolPreview(versions[idx].protocol, "planner-protocol-preview");
 }
 
-// Heuristic: when a protocol is active, decide whether the user's message is
-// (a) feedback / a refinement request to apply, or (b) a normal trial-related
-// question. Recognised patterns:
-//   • Explicit feedback / review language ("here's the feedback", "reviewer
-//     comments", "peer review").
-//   • Refinement verb + protocol-section noun ("change/modify/update the
-//     inclusion criteria", "tighten the sample size justification").
-//   • Imperatives anchored on a known protocol section ("the comparator
-//     should be pembrolizumab", "set sample size to 200").
-// Returns false when no protocol is loaded — in pure trial-search mode the
-// chat planner answers normally.
-function isRefinementIntent(text) {
+// Heuristic: detect an explicit "apply the proposed changes" confirmation
+// after the assistant has analyzed feedback. Strict whitelist of phrases so
+// we don't conflate confirmation with unrelated affirmatives ("yes, that's
+// a HER2-positive trial"). Returns false when no protocol is loaded —
+// without an active protocol there's nothing to refine.
+//
+// Why a whitelist (not natural language): the alternative is sending every
+// turn to the LLM to decide intent, which doubles the round-trips and adds
+// latency before the refine call. A short, clear phrase set covers the
+// common confirmation forms ("apply", "go ahead", "yes apply", "apply 1 and
+// 3", "approved") and the system prompt asks the model to suggest one of
+// those phrasings in its question.
+function isApplyConfirmation(text) {
   if (!plannerState.currentProtocol) return false;
-  const lower = (text || "").toLowerCase();
+  const lower = (text || "").toLowerCase().trim();
   if (!lower) return false;
 
-  // Strong: explicit feedback / review language.
-  const strong = [
-    /\bhere'?s? (the |some |my |our |peer |reviewer'?s? )?feedback\b/,
-    /\b(apply|here is|got|received|attaching) (the |this |some |my |our )?feedback\b/,
-    /\bfeedback (on|for|about) (the |my |our |this )?(protocol|report|draft|design)\b/,
-    /\breviewer'?s? (comments|says|wrote|notes|suggests|recommend)/,
-    /\b(peer|external|llm) review\b/,
-    /\bfrom (the |another )?reviewer\b/,
-    /\bcomments? on (the |my |our |this )?(protocol|report|draft)\b/,
-    /\bincorporate (the |this |these |peer )?(feedback|comments?|review)\b/,
+  const patterns = [
+    // Bare "apply" or with simple suffix
+    /^apply\.?$/,
+    /^apply (it|them|all|now|please|the changes?|these changes?|those changes?|the feedback|the edits?)\.?$/,
+    // "apply 1 and 3" / "apply items 1, 2"
+    /^apply (item ?s? )?\d+([\s,]+(and\s+)?\d+)*\.?$/,
+    // "skip 2 and apply the rest" / "all except 2"
+    /^(apply )?all except (item ?s? )?\d+([\s,]+(and\s+)?\d+)*\.?$/,
+    /^skip (item ?s? )?\d+([\s,]+(and\s+)?\d+)*[, ]+(apply )?(the )?(rest|others?|remaining)\.?$/,
+    // "yes apply" / "yes, go ahead"
+    /^yes,?\s*(apply|go ahead|proceed|do it|please)( (it|them|all|now|the changes?|these changes?|those changes?))?\.?$/,
+    // Bare confirmations
+    /^(go ahead|proceed|do it|approved?|confirmed?)\.?$/,
+    // "make these changes" / "incorporate the feedback" / "commit the changes"
+    /^make (the |these |those )?changes?\.?$/,
+    /^incorporate (the |these |those )?(changes?|feedback|edits?|items?)\.?$/,
+    /^(commit|save) (the |these |those )?changes?\.?$/,
+    // "update the protocol/report"
+    /^update (it|the (protocol|report|draft))\.?$/,
+    // "sounds good, apply" / "looks good, go ahead"
+    /^(sounds?|looks?) good,?\s*(apply|do it|proceed|go ahead)\.?$/,
   ];
-  if (strong.some((re) => re.test(lower))) return true;
-
-  // Moderate: refinement verb against a protocol-section noun.
-  const verb = /\b(change|modify|update|revise|edit|fix|tighten|loosen|swap|replace|add|remove|delete|drop|increase|decrease|reduce|expand|adjust|rephrase|rewrite|amend)\b/;
-  const noun = /\b(protocol|report|draft|inclusion criteri|exclusion criteri|sample size|primary endpoint|secondary endpoint|primary objective|secondary objective|exploratory objective|study design|study schema|intervention|comparator|control arm|sponsor|sex|age|dose|schedule|enrollment|criterion|criteria|arm|treatment|monitoring|adverse|endpoint|justification|locations?)\b/;
-  if (verb.test(lower) && noun.test(lower)) return true;
-
-  // Imperative directives anchored on a protocol section.
-  if (/\b(should|must|need to) (be|have|use|include|exclude|require) /.test(lower) && noun.test(lower)) return true;
-  if (/\bset (the )?(sample size|enrollment|n|inclusion|exclusion|primary endpoint|comparator)\b/.test(lower)) return true;
-
-  return false;
+  return patterns.some((re) => re.test(lower));
 }
 
 // Stream-like UX even though /api/protocol/refine is sync: while the request
