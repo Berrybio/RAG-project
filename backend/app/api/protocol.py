@@ -9,6 +9,7 @@ from ..core.llm import BaseLLMProvider
 from ..core.protocol_history import (
     ProtocolHistoryPaths,
     list_protocols,
+    load_all_versions,
     load_protocol,
     save_initial,
     save_revision,
@@ -27,6 +28,7 @@ from ..models.schemas import (
     ProtocolLoadResponse,
     ProtocolRequest,
     ProtocolResponse,
+    ProtocolVersionEntry,
     RefineProtocolRequest,
     RefineProtocolResponse,
     SourceDoc,
@@ -124,6 +126,14 @@ async def refine_protocol(
     # Save as the next version under the same history entry. Best-effort:
     # if the protocol_id is missing or the meta file vanished (manual cleanup),
     # we fall back to saving as a new initial entry so the work isn't lost.
+    # Capture the user's latest request + assistant note + changed fields so
+    # the saved change_log is rich enough to rebuild version chips on a
+    # future session.
+    latest_user_request = ""
+    for m in reversed(body.refinement_messages):
+        if m.role == "user" and (m.content or "").strip():
+            latest_user_request = m.content
+            break
     new_meta: dict = {"id": body.protocol_id, "version_count": 0}
     if body.protocol_id:
         try:
@@ -132,6 +142,9 @@ async def refine_protocol(
                 user_id=_user_id(identity),
                 protocol_id=body.protocol_id,
                 protocol=updated,
+                user_request=latest_user_request,
+                assistant_note=note,
+                changed_fields=changed,
             )
         except FileNotFoundError:
             logger.warning(
@@ -211,23 +224,44 @@ async def list_user_protocols(
 async def load_user_protocol(
     protocol_id: str,
     version: int | None = None,
+    include_versions: bool = False,
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
-    """Load a specific protocol (latest version by default) for editing."""
+    """Load a stored protocol for editing.
+
+    With ``include_versions=true`` (used by the planner UI on history load),
+    the response also carries every version of the protocol with its
+    change-log metadata so the version chips + compare-any-two flow work
+    across sessions, not just within the current session's refinements.
+    """
+    user_id = _user_id(identity)
     try:
         protocol, meta = load_protocol(
             history_paths,
-            user_id=_user_id(identity),
+            user_id=user_id,
             protocol_id=protocol_id,
             version=version,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+    all_versions: list[ProtocolVersionEntry] = []
+    if include_versions:
+        try:
+            for entry in load_all_versions(history_paths, user_id, protocol_id):
+                all_versions.append(ProtocolVersionEntry(**entry))
+        except FileNotFoundError:
+            # Meta existed for the latest-version load above; the per-version
+            # load shouldn't normally fail. If it does we just return an empty
+            # all_versions list rather than 500'ing the request.
+            logger.warning("load_all_versions failed for %s/%s", user_id, protocol_id)
+
     return ProtocolLoadResponse(
         protocol=protocol,
         meta=ProtocolEntry(**meta),
         version=version if version is not None else int(meta.get("version_count", 1)),
+        all_versions=all_versions,
     )
 
 

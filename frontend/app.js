@@ -299,29 +299,68 @@ async function refreshRecentProtocols(maxToShow = 6) {
 async function loadProtocolFromHistory(protocolId) {
   if (!protocolId) return;
   try {
-    const resp = await apiFetch(`${API_BASE}/protocols/${encodeURIComponent(protocolId)}`);
+    // Ask the backend for the full version history alongside the latest
+    // protocol so the version chip strip rebuilds with every prior version
+    // — not just the one we're loading. This is what lets compare-any-two
+    // work across sessions (otherwise the chips would reset and the user
+    // would lose access to earlier versions on disk).
+    const url = `${API_BASE}/protocols/${encodeURIComponent(protocolId)}?include_versions=true`;
+    const resp = await apiFetch(url);
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
     const protocol = data.protocol;
     const meta = data.meta || {};
     plannerState.currentProtocol = protocol;
     plannerState.activeProtocolId = meta.id || protocolId;
-    plannerState.protocolVersions = [{
-      label: `v${data.version || meta.version_count || 1} (loaded)`,
-      protocol,
-      userRequest: null,
-      assistantNote: `Loaded from history: ${meta.title || "(no title)"}`,
-      changedFields: [],
-      timestamp: meta.last_modified || meta.created_at || new Date().toISOString(),
-    }];
-    plannerState.activeVersion = 0;
+
+    // Rebuild protocolVersions from the server's all_versions list. Fall
+    // back to a single-entry list if the server returned nothing (e.g. an
+    // older deployment without this endpoint capability).
+    const allVersions = Array.isArray(data.all_versions) ? data.all_versions : [];
+    if (allVersions.length > 0) {
+      plannerState.protocolVersions = allVersions.map((v) => {
+        const isInitial = v.version === 1;
+        const baseLabel = `v${v.version}`;
+        const label = isInitial ? `${baseLabel} (original)` : baseLabel;
+        return {
+          label,
+          protocol: v.protocol,
+          userRequest: v.user_request || null,
+          assistantNote:
+            v.assistant_note ||
+            (isInitial ? "Initial generation from the planning brief." : ""),
+          changedFields: v.changed_fields || [],
+          timestamp: v.timestamp || meta.last_modified || meta.created_at || new Date().toISOString(),
+        };
+      });
+      // Active version: whichever the load endpoint returned (default
+      // latest). Match by version number against the rebuilt list.
+      const targetVersion = data.version || meta.version_count || allVersions[allVersions.length - 1].version;
+      plannerState.activeVersion = plannerState.protocolVersions.findIndex(
+        (_, idx) => allVersions[idx].version === targetVersion,
+      );
+      if (plannerState.activeVersion < 0) {
+        plannerState.activeVersion = plannerState.protocolVersions.length - 1;
+      }
+    } else {
+      // Legacy fallback — single-entry strip.
+      plannerState.protocolVersions = [{
+        label: `v${data.version || meta.version_count || 1} (loaded)`,
+        protocol,
+        userRequest: null,
+        assistantNote: `Loaded from history: ${meta.title || "(no title)"}`,
+        changedFields: [],
+        timestamp: meta.last_modified || meta.created_at || new Date().toISOString(),
+      }];
+      plannerState.activeVersion = 0;
+    }
     plannerState.lastSummary = meta.summary_brief || plannerState.lastSummary;
     const e = plannerEls();
     renderVersionBar();
     renderProtocolPreview(protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
     e.protocolResult.scrollIntoView({ behavior: "smooth", block: "start" });
-    showToast(`Loaded: ${meta.title || "protocol"}`);
+    showToast(`Loaded: ${meta.title || "protocol"} (${plannerState.protocolVersions.length} version${plannerState.protocolVersions.length === 1 ? "" : "s"})`);
   } catch (err) {
     showToast(`Failed to load protocol: ${err.message}`, "error");
   }

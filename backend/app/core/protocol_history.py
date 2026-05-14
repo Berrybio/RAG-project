@@ -188,6 +188,7 @@ def _build_meta(
     version_count: int,
     created_at: str,
     last_modified: str,
+    change_log: list[dict] | None = None,
 ) -> dict:
     return {
         "id": protocol_id,
@@ -201,6 +202,27 @@ def _build_meta(
         "version_count": version_count,
         "created_at": created_at,
         "last_modified": last_modified,
+        # One row per saved version describing what changed. Lets the planner
+        # rebuild the full version-chip history (with labels + notes) when the
+        # user reloads the protocol from a fresh session.
+        "change_log": list(change_log or []),
+    }
+
+
+def _change_log_entry(
+    *,
+    version: int,
+    user_request: str,
+    assistant_note: str,
+    changed_fields: list[str],
+    timestamp: str,
+) -> dict:
+    return {
+        "version": version,
+        "user_request": (user_request or "")[:600],
+        "assistant_note": (assistant_note or "")[:1500],
+        "changed_fields": list(changed_fields or []),
+        "timestamp": timestamp,
     }
 
 
@@ -238,6 +260,13 @@ def save_initial(
         version_count=1,
         created_at=now,
         last_modified=now,
+        change_log=[_change_log_entry(
+            version=1,
+            user_request=summary_brief or "Initial generation from the planning brief",
+            assistant_note="Initial protocol generated from the conversation summary.",
+            changed_fields=[],
+            timestamp=now,
+        )],
     )
     with _history_lock:
         paths.protocol_dir(user_id, protocol_id).mkdir(parents=True, exist_ok=True)
@@ -260,8 +289,17 @@ def save_revision(
     user_id: str,
     protocol_id: str,
     protocol: dict,
+    user_request: str = "",
+    assistant_note: str = "",
+    changed_fields: list[str] | None = None,
 ) -> dict:
-    """Persist a refined protocol as the next version. Returns the updated meta."""
+    """Persist a refined protocol as the next version. Returns the updated meta.
+
+    The new ``user_request`` / ``assistant_note`` / ``changed_fields`` are
+    appended to the meta's ``change_log`` so the planner can rehydrate the
+    full version-chip history (with labels + tooltips) when the user
+    reloads the protocol from a fresh session.
+    """
     if not protocol_id:
         raise ValueError("protocol_id is required to save a revision")
     with _history_lock:
@@ -283,6 +321,19 @@ def save_revision(
         meta["intervention_name"] = (protocol.get("intervention_name") or "").strip()[:200]
         meta["version_count"] = next_version
         meta["last_modified"] = _now_iso()
+        # Append change-log entry. Backward-compat: meta files written by an
+        # earlier version of this module don't have change_log yet — start one.
+        log = meta.get("change_log")
+        if not isinstance(log, list):
+            log = []
+        log.append(_change_log_entry(
+            version=next_version,
+            user_request=user_request,
+            assistant_note=assistant_note,
+            changed_fields=list(changed_fields or []),
+            timestamp=meta["last_modified"],
+        ))
+        meta["change_log"] = log
 
         paths.version_file(user_id, protocol_id, next_version).write_text(
             json.dumps(protocol, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -358,6 +409,48 @@ def load_protocol(
         )
     protocol = json.loads(vfile.read_text(encoding="utf-8"))
     return protocol, meta
+
+
+def load_all_versions(
+    paths: ProtocolHistoryPaths,
+    user_id: str,
+    protocol_id: str,
+) -> list[dict]:
+    """Return every saved version of a protocol with its change-log metadata.
+
+    Each item is ``{version, protocol, user_request, assistant_note,
+    changed_fields, timestamp}``. Pre-change-log protocols (older entries
+    without the ``change_log`` field) fall back to empty notes so the planner
+    can still render version chips with at least version + timestamp.
+    """
+    meta_path = paths.meta_file(user_id, protocol_id)
+    if not meta_path.exists():
+        raise FileNotFoundError(f"No protocol meta found for {user_id}/{protocol_id}")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    total = int(meta.get("version_count", 1))
+    raw_log = meta.get("change_log") or []
+    log_by_version = {int(e.get("version", 0)): e for e in raw_log if isinstance(e, dict)}
+    fallback_ts = meta.get("created_at") or meta.get("last_modified") or _now_iso()
+
+    versions: list[dict] = []
+    for v in range(1, total + 1):
+        vfile = paths.version_file(user_id, protocol_id, v)
+        if not vfile.exists():
+            # Skip missing version files rather than failing — a manual cleanup
+            # shouldn't tank the load endpoint for the rest of the history.
+            logger.warning("Missing version file v%d for %s/%s", v, user_id, protocol_id)
+            continue
+        protocol = json.loads(vfile.read_text(encoding="utf-8"))
+        entry = log_by_version.get(v, {})
+        versions.append({
+            "version": v,
+            "protocol": protocol,
+            "user_request": entry.get("user_request", ""),
+            "assistant_note": entry.get("assistant_note", ""),
+            "changed_fields": entry.get("changed_fields", []),
+            "timestamp": entry.get("timestamp", fallback_ts),
+        })
+    return versions
 
 
 # ---------------------------------------------------------------------------
