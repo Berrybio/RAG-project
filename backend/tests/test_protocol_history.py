@@ -9,6 +9,7 @@ from app.core.protocol_history import (
     ProtocolHistoryPaths,
     auto_title,
     list_protocols,
+    load_all_versions,
     load_protocol,
     match_query_to_entry,
     query_mentions_previous_protocol,
@@ -204,3 +205,103 @@ def test_match_query_caps_at_top_n(tmp_path):
 def test_match_query_empty_history(tmp_path):
     paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
     assert match_query_to_entry(paths, "user1", "based on the previous report") == []
+
+
+# ---------------------------------------------------------------------------
+# Change log + load_all_versions (cross-session version chip rehydration)
+# ---------------------------------------------------------------------------
+
+def test_save_initial_seeds_change_log(tmp_path):
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    meta = save_initial(paths, "user1", _proto(), summary_brief="Phase II planning brief")
+    log = meta.get("change_log") or []
+    assert len(log) == 1
+    assert log[0]["version"] == 1
+    assert "planning brief" in log[0]["user_request"].lower()
+
+
+def test_save_revision_appends_to_change_log(tmp_path):
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    meta1 = save_initial(paths, "user1", _proto())
+    meta2 = save_revision(
+        paths, "user1", meta1["id"],
+        _proto(phase="Phase III"),
+        user_request="tighten ECOG to 0-1",
+        assistant_note="Applied item 1 — inclusion now requires ECOG 0-1.",
+        changed_fields=["inclusion_criteria"],
+    )
+    log = meta2["change_log"]
+    assert len(log) == 2
+    assert log[1]["version"] == 2
+    assert log[1]["user_request"] == "tighten ECOG to 0-1"
+    assert log[1]["changed_fields"] == ["inclusion_criteria"]
+
+
+def test_save_revision_backfills_change_log_when_missing(tmp_path):
+    """A protocol saved by an older version of this module won't have a
+    change_log field on disk yet. The next save_revision should start one
+    rather than crashing on the missing field."""
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    meta1 = save_initial(paths, "user1", _proto())
+    # Simulate an older meta.json with no change_log key.
+    import json
+    meta_path = paths.meta_file("user1", meta1["id"])
+    old = json.loads(meta_path.read_text())
+    old.pop("change_log", None)
+    meta_path.write_text(json.dumps(old))
+
+    meta2 = save_revision(
+        paths, "user1", meta1["id"],
+        _proto(phase="Phase III"),
+        user_request="apply changes",
+        assistant_note="ok",
+        changed_fields=["phase"],
+    )
+    assert meta2["change_log"][-1]["version"] == 2
+
+
+def test_load_all_versions_returns_each_version(tmp_path):
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    meta = save_initial(paths, "user1", _proto(phase="Phase II"))
+    save_revision(
+        paths, "user1", meta["id"], _proto(phase="Phase III"),
+        user_request="tighten ECOG", assistant_note="applied",
+        changed_fields=["inclusion_criteria"],
+    )
+    save_revision(
+        paths, "user1", meta["id"], _proto(phase="Phase III", conditions="TNBC adjuvant"),
+        user_request="add exclusion", assistant_note="applied",
+        changed_fields=["exclusion_criteria"],
+    )
+
+    versions = load_all_versions(paths, "user1", meta["id"])
+    assert [v["version"] for v in versions] == [1, 2, 3]
+    assert versions[0]["protocol"]["phase"] == "Phase II"
+    assert versions[2]["protocol"]["phase"] == "Phase III"
+    assert versions[1]["user_request"] == "tighten ECOG"
+    assert versions[2]["changed_fields"] == ["exclusion_criteria"]
+
+
+def test_load_all_versions_pre_changelog_protocol(tmp_path):
+    """Protocols saved before change_log existed (or with manual cleanup)
+    should still load — every version is returned with empty notes."""
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    meta = save_initial(paths, "user1", _proto())
+    save_revision(paths, "user1", meta["id"], _proto(phase="Phase III"))
+
+    # Strip the change_log from the meta to simulate the legacy state.
+    import json
+    meta_path = paths.meta_file("user1", meta["id"])
+    raw = json.loads(meta_path.read_text())
+    raw["change_log"] = []
+    meta_path.write_text(json.dumps(raw))
+
+    versions = load_all_versions(paths, "user1", meta["id"])
+    assert len(versions) == 2
+    assert all(v.get("user_request") == "" for v in versions)
+
+
+def test_load_all_versions_unknown_protocol(tmp_path):
+    paths = ProtocolHistoryPaths.from_data_dir(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        load_all_versions(paths, "user1", "no-such-id")

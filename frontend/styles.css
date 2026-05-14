@@ -665,52 +665,38 @@ footer {
 .version-chip.active .version-chip-note { opacity: 0.95; }
 .version-compare-btn { font-size: 12px; padding: 6px 12px; }
 
-.refine-section {
-    margin-top: 28px;
-    padding: 18px;
-    border: 1px solid #dadce0;
-    border-radius: 8px;
+/* Small hint shown beneath the protocol preview — refinements now happen in
+   the main planner chat, no dedicated panel. */
+.protocol-refine-hint {
+    margin: 18px 0 0 0;
+    padding: 10px 14px;
+    border: 1px dashed #cbd2d8;
+    border-radius: 6px;
     background: #fafbfc;
-}
-.refine-section h3 {
-    margin: 0 0 6px 0;
-    font-size: 16px;
-}
-.refine-intro {
-    margin: 0 0 12px 0;
     font-size: 13px;
     color: var(--text-secondary);
+    line-height: 1.5;
 }
-.refine-thread {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 12px;
-    max-height: 360px;
-    overflow-y: auto;
+
+/* Inline "applied feedback" assistant bubble in the planner chat — shows
+   what changed when a refinement is applied from the main conversation. */
+.protocol-applied-bar {
+    margin-top: 8px;
+    padding: 8px 10px;
+    background: #ecfdf3;
+    border: 1px solid #a7d9ad;
+    border-radius: 6px;
+    font-size: 12px;
 }
-.refine-msg {
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    line-height: 1.45;
-    max-width: 90%;
+.protocol-applied-bar-label {
+    color: var(--text-secondary);
+    font-weight: 600;
+    margin-bottom: 4px;
 }
-.refine-msg.user {
-    align-self: flex-end;
-    background: #e8f0fe;
-    color: #174ea6;
-}
-.refine-msg.assistant {
-    align-self: flex-start;
-    background: #fff;
-    border: 1px solid #e0e0e0;
-}
-.refine-msg .changed-fields {
-    margin-top: 6px;
+.protocol-applied-bar-changes {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
-    color: var(--text-secondary);
-    font-style: italic;
+    color: var(--text-primary);
 }
 
 /* Diff modal */

@@ -24,6 +24,7 @@ from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
 from ..core.feedback_examples import FeedbackExampleStore
 from ..core.protocol_history import (
+    load_protocol,
     match_query_to_entry,
     query_mentions_previous_protocol,
 )
@@ -59,6 +60,11 @@ class ChatRequest(BaseModel):
     # diversification that goes with it). Useful for clinicians who already
     # know exactly what they're looking for and want a focused top-K result.
     include_landscape: bool = True
+    # Optional id of the protocol the user currently has open in the planner.
+    # When set, the backend injects a small <active_protocol> hint into the
+    # LLM context so questions like "is our sample size reasonable?" don't
+    # require pasting the protocol back into chat.
+    active_protocol_id: str = ""
 
 
 class SummarizeRequest(BaseModel):
@@ -162,6 +168,8 @@ async def chat_stream(
         else None
     )
 
+    user_id = (identity.get("user_id") or "anonymous").strip() or "anonymous"
+
     # Detect "based on the previous protocol" hints in the user's message and
     # surface ALL their stored protocols as clickable load chips in the UI.
     # The list (capped, ranked by relevance) is also injected into the LLM's
@@ -169,13 +177,31 @@ async def chat_stream(
     # them rather than gaslighting the user with "no protocol exists".
     protocol_matches: list[dict] = []
     if query_mentions_previous_protocol(latest_query):
-        user_id = (identity.get("user_id") or "anonymous").strip() or "anonymous"
         try:
             protocol_matches = match_query_to_entry(
                 history_paths, user_id, latest_query, top_n=10,
             )
         except Exception:  # pragma: no cover - history is best-effort
             logger.exception("Failed to match previous protocols for chat hint")
+
+    # Resolve the active-protocol meta + latest JSON. When the frontend passes
+    # active_protocol_id, the planner has one open in the preview pane; we
+    # surface that to the LLM so it can answer questions about the protocol
+    # without the user having to paste it back into chat.
+    active_protocol_meta: dict | None = None
+    active_protocol_json: dict | None = None
+    if body.active_protocol_id:
+        try:
+            active_protocol_json, active_protocol_meta = load_protocol(
+                history_paths, user_id, body.active_protocol_id,
+            )
+        except FileNotFoundError:
+            logger.info(
+                "chat_stream: active_protocol_id %s not found for user %s",
+                body.active_protocol_id, user_id,
+            )
+        except Exception:  # pragma: no cover - non-critical
+            logger.exception("Failed to load active protocol for chat context")
 
     log_event(
         "query_received",
@@ -213,6 +239,8 @@ async def chat_stream(
                 llm, history, retrieved,
                 landscape=landscape, aliases=aliases, examples=examples,
                 previous_protocols=protocol_matches,
+                active_protocol_meta=active_protocol_meta,
+                active_protocol_json=active_protocol_json,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"

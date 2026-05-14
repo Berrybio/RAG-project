@@ -187,8 +187,25 @@ class ProtocolListResponse(BaseModel):
     protocols: list[ProtocolEntry]
 
 
+class ProtocolVersionEntry(BaseModel):
+    """One row in a protocol's version history. Lets the planner rehydrate
+    every version chip (label + change note) when a protocol is loaded from
+    a fresh session."""
+    version: int
+    protocol: dict
+    user_request: str = ""
+    assistant_note: str = ""
+    changed_fields: list[str] = Field(default_factory=list)
+    timestamp: str = ""
+
+
 class ProtocolLoadResponse(BaseModel):
     """Returned when a stored protocol + meta are loaded for editing."""
     protocol: dict
     meta: ProtocolEntry
     version: int
+    # Populated when the client requests ``?include_versions=true``. Each
+    # entry has its own JSON + change-log metadata so the planner can
+    # rebuild the full version chip strip and support compare-any-two
+    # across the protocol's lifetime.
+    all_versions: list[ProtocolVersionEntry] = Field(default_factory=list)
