@@ -650,6 +650,25 @@ function attachSourcesToMessage(messageDiv, sources) {
   messageDiv.appendChild(details);
 }
 
+// Parse the machine-readable [APPLY_PROTOCOL_CHANGES] block the chat planner
+// emits when it interprets the user's reply as a confirmation to apply
+// previously-proposed changes. This is the safety net for natural-language
+// confirmations that the strict isApplyConfirmation whitelist misses
+// ("sounds good, please make those changes", "yep, go ahead with that").
+//
+// Returns { cleanText, applyDirective }:
+//   cleanText        – the prose with the tag stripped (what gets shown).
+//   applyDirective   – string like "all" / "1, 3" / "all except 2", or
+//                      null if the tag wasn't present.
+function extractApplyDirective(text) {
+  const re = /\[APPLY_PROTOCOL_CHANGES\]\s*apply:\s*([^\n\[]+?)\s*\[\/APPLY_PROTOCOL_CHANGES\]/i;
+  const m = text.match(re);
+  if (!m) return { cleanText: text, applyDirective: null };
+  const directive = (m[1] || "").trim();
+  const cleanText = text.replace(re, "").trim();
+  return { cleanText, applyDirective: directive || "all" };
+}
+
 // Parse a [CHOICES] ... [/CHOICES] block out of assistant text and return
 // { cleanText, choices: string[] }. Tolerates leading whitespace and
 // preserves the prose before the block as the visible message.
@@ -827,12 +846,19 @@ async function plannerSend() {
       contentNode.nodeValue = assistantText;
     }
 
+    // Strip the [APPLY_PROTOCOL_CHANGES] safety-net tag if present. This is
+    // the planner's signal that it interpreted the user's reply as a
+    // confirmation (even if the strict isApplyConfirmation heuristic missed
+    // it). We act on it by triggering refine right after the chat reply.
+    const applyParse = extractApplyDirective(assistantText);
+    let cleanedForChoices = applyParse.cleanText;
+
     // Strip any [CHOICES] block out of the bubble text and render the
     // options as clickable chips below the message. The full (unstripped)
     // text goes into conversation history so the model can see what it
     // offered, but the UI only shows the prose and the chips.
-    const { cleanText, choices } = extractChoices(assistantText);
-    if (choices.length > 0) {
+    const { cleanText, choices } = extractChoices(cleanedForChoices);
+    if (choices.length > 0 || applyParse.applyDirective) {
       contentNode.nodeValue = cleanText;
     }
 
@@ -840,17 +866,39 @@ async function plannerSend() {
     // (NCT followed by 8 digits) to clinicaltrials.gov so the clinician can
     // click through to the source. Done after streaming completes — easier
     // than diffing partial tokens that may split an NCT ID across chunks.
-    const finalText = choices.length > 0 ? cleanText : assistantText;
+    const finalText = (choices.length > 0 || applyParse.applyDirective)
+      ? cleanText : assistantText;
     const linkified = linkifyNctIds(finalText);
     assistantDiv.replaceChild(linkified, contentNode);
 
-    // Persist assistant turn (keep original text in history for LLM context).
-    plannerState.messages.push({ role: "assistant", content: assistantText });
+    // Persist assistant turn — store the CLEAN version (tag stripped) so
+    // the refine endpoint's view of the conversation doesn't contain the
+    // tag itself. The directive still tells us what to apply.
+    const persistedAssistantText = applyParse.applyDirective ? cleanText : assistantText;
+    plannerState.messages.push({ role: "assistant", content: persistedAssistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
     attachChoicesToMessage(assistantDiv, choices);
     attachFeedbackBar(assistantDiv, assistantText, streamSources);
     attachProtocolMatchBar(assistantDiv, protocolMatches);
     revealPlannerActions();
+
+    // Safety-net trigger: the planner emitted an apply directive, meaning
+    // it interpreted the user's reply as confirmation. Kick off the refine
+    // call now. The refine response renders as a NEW assistant bubble below
+    // the analytical reply so the user sees: (1) "Applying those now…",
+    // then (2) the actual list of changes applied.
+    if (applyParse.applyDirective) {
+      const applyDiv = addChatMessage("assistant", "");
+      const applyNode = document.createTextNode("");
+      applyDiv.appendChild(applyNode);
+      try {
+        // Pass the user's actual confirmation text (e.g. "yes please apply")
+        // as userText so the version chip's tooltip reads naturally.
+        await applyRefinementInChat(query, applyDiv, applyNode);
+      } catch (err) {
+        applyNode.nodeValue = `Failed to apply changes: ${err.message}`;
+      }
+    }
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
     contentNode.nodeValue = assistantText;

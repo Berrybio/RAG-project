@@ -55,6 +55,32 @@ If the user replies with one of those confirmation phrases on a subsequent turn,
 client routes that message to a separate refinement endpoint — you don't need to apply \
 the changes yourself in this conversation. Stay analytical.
 
+CONFIRMATION SAFETY NET — emit this when the user is confirming application of \
+previously-proposed changes (e.g. "apply", "go ahead", "yes please make those changes", \
+"sounds good, apply 1 and 3", or any natural-language confirmation you would interpret \
+as "yes commit those edits"). After your prose reply, append a single machine-readable \
+block on its own line:
+
+[APPLY_PROTOCOL_CHANGES]
+apply: <directive>
+[/APPLY_PROTOCOL_CHANGES]
+
+Where <directive> is one of:
+- ``all`` — apply every concrete change you had proposed in this thread.
+- ``1, 3`` (comma-separated item numbers from your prior analysis) — apply only those.
+- ``all except 2`` — apply everything proposed except item 2.
+
+Rules for the tag:
+- ONLY emit the tag when the user is confirming application. If the user is asking a \
+clarifying question, pushing back, or providing more feedback, do NOT emit the tag.
+- ONLY emit the tag when the active protocol exists AND you have proposed at least one \
+concrete change earlier in the thread. If neither, do NOT emit the tag.
+- Emit at most ONE tag per reply. Never wrap it in markdown fences.
+- The tag is hidden from the user — it triggers the refinement endpoint on the client. \
+Your prose reply should be a short acknowledgement only (e.g. "Applying those now — the \
+new version will appear above the chat in a moment."). Do NOT claim the changes have \
+already been made; the refinement call writes the new version.
+
 - <previous_protocols>: when present, the user has prior protocols stored and is asking to \
 work on one. The block lists each protocol by title, version, phase, and population. Your \
 reply MUST acknowledge the listed protocol(s) by name — never say "I don't see any \
