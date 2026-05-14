@@ -1035,29 +1035,41 @@ function isApplyConfirmation(text) {
   const lower = (text || "").toLowerCase().trim();
   if (!lower) return false;
 
+  // Normalise: trim trailing punctuation so "apply." and "yes, please update!" land
+  // on the same patterns. Collapse internal whitespace.
+  const norm = lower.replace(/[.!?]+$/, "").replace(/\s+/g, " ").trim();
+
+  // Action verbs that signal "commit the proposed changes".
+  const ACTION = "(apply|update|commit|incorporate|proceed|go ahead|do it|make (the|these|those)? ?changes?|approved?|confirmed?)";
+  // Optional polite/affirmative prefix: "yes,? please ", "please ", "yes ", "yep ",
+  // "ok ", "sure ", "let's ", "let me know", etc.
+  const PREFIX = "(yes,?\\s*)?(please\\s+)?";
+
   const patterns = [
-    // Bare "apply" or with simple suffix
-    /^apply\.?$/,
-    /^apply (it|them|all|now|please|the changes?|these changes?|those changes?|the feedback|the edits?)\.?$/,
+    // The bulk of confirmation phrasings — affirmative prefix + action verb +
+    // optional object ("it", "them", "the changes", "1 and 3", etc.).
+    new RegExp("^" + PREFIX + ACTION + "( (it|them|all|now|please|the changes?|these changes?|those changes?|the feedback|the edits?|the protocol|the report|the draft))?$", "i"),
+    // "yes please" / "yes, please" alone (when the prior turn proposed something it
+    // unambiguously means apply).
+    /^yes,?\s*please$/,
+    /^yes,?\s*update$/,
     // "apply 1 and 3" / "apply items 1, 2"
-    /^apply (item ?s? )?\d+([\s,]+(and\s+)?\d+)*\.?$/,
-    // "skip 2 and apply the rest" / "all except 2"
-    /^(apply )?all except (item ?s? )?\d+([\s,]+(and\s+)?\d+)*\.?$/,
-    /^skip (item ?s? )?\d+([\s,]+(and\s+)?\d+)*[, ]+(apply )?(the )?(rest|others?|remaining)\.?$/,
-    // "yes apply" / "yes, go ahead"
-    /^yes,?\s*(apply|go ahead|proceed|do it|please)( (it|them|all|now|the changes?|these changes?|those changes?))?\.?$/,
-    // Bare confirmations
-    /^(go ahead|proceed|do it|approved?|confirmed?)\.?$/,
-    // "make these changes" / "incorporate the feedback" / "commit the changes"
-    /^make (the |these |those )?changes?\.?$/,
-    /^incorporate (the |these |those )?(changes?|feedback|edits?|items?)\.?$/,
-    /^(commit|save) (the |these |those )?changes?\.?$/,
-    // "update the protocol/report"
-    /^update (it|the (protocol|report|draft))\.?$/,
+    /^(yes,?\s*)?(please\s+)?apply (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    // "update items 1 and 3" / "commit 1, 3"
+    /^(yes,?\s*)?(please\s+)?(update|commit) (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    // "all except 2" / "skip 2 and apply the rest"
+    /^(apply )?all except (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    /^skip (item ?s? )?\d+([\s,]+(and\s+)?\d+)*[, ]+(apply )?(the )?(rest|others?|remaining)$/,
+    // "go ahead and update" / "let's apply" / "let's commit those"
+    /^(go ahead and|let'?s) (apply|update|commit|do it|proceed|make (the|these|those)? ?changes?)( (it|them|all|the changes?|these changes?|those changes?))?$/,
     // "sounds good, apply" / "looks good, go ahead"
-    /^(sounds?|looks?) good,?\s*(apply|do it|proceed|go ahead)\.?$/,
+    /^(sounds?|looks?) good,?\s*(apply|do it|proceed|go ahead|update|commit)$/,
+    // Bare interjections that, when a protocol is active, almost always mean
+    // confirm. We keep these short — anything longer goes through the LLM safety net.
+    /^(yep|yup|yeah)$/,
+    /^(ok|okay|sure),?\s*(apply|update|do it|proceed|go ahead|commit)$/,
   ];
-  return patterns.some((re) => re.test(lower));
+  return patterns.some((re) => re.test(norm));
 }
 
 // Stream-like UX even though /api/protocol/refine is sync: while the request
