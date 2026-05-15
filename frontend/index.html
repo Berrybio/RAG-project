@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=18">
+    <link rel="stylesheet" href="styles.css?v=20">
 </head>
 <body>
     <header>
@@ -21,6 +21,12 @@
             </p>
 
             <div id="planner-messages" class="chat-messages"></div>
+
+            <!-- Recent protocols strip — populated from /api/protocols. Hidden when empty. -->
+            <div id="planner-recent-protocols" class="recent-protocols hidden">
+                <div class="recent-protocols-label">Recent protocols:</div>
+                <div id="planner-recent-protocols-list" class="recent-protocols-list"></div>
+            </div>
 
             <div class="input-group">
                 <textarea id="planner-input" placeholder="e.g. 'Show me Phase 2 CDK4/6 trials for HR+/HER2- metastatic breast cancer', then follow up with design questions." rows="2"></textarea>
@@ -66,22 +72,13 @@
                     <button id="planner-download-pdf-btn" class="secondary-btn">Download as PDF</button>
                 </div>
                 <div id="planner-protocol-preview"></div>
-
-                <div id="planner-refine-section" class="refine-section">
-                    <h3>Refine the report</h3>
-                    <p class="refine-intro">
-                        Spotted something wrong? Tell the assistant what to correct
-                        (e.g. <em>"the control arm should be pembrolizumab monotherapy, not chemotherapy"</em>)
-                        and it will update the protocol. Each correction creates a new version you can compare against.
-                    </p>
-                    <div id="planner-refine-thread" class="refine-thread"></div>
-                    <div class="input-group">
-                        <textarea id="planner-refine-input" placeholder="Describe the correction..." rows="2"></textarea>
-                        <div class="controls">
-                            <button id="planner-refine-send-btn" class="primary-btn">Send correction</button>
-                        </div>
-                    </div>
-                </div>
+                <p class="protocol-refine-hint">
+                    To iterate on the protocol, paste peer / LLM feedback or describe a change in the chat above
+                    (e.g. <em>"here's the feedback of the protocol: ..."</em>).
+                    The assistant will analyze each item — rationale, references, trade-offs — and ask before
+                    applying anything. Reply with <em>"apply"</em>, <em>"go ahead"</em>, or
+                    <em>"apply 1 and 3"</em> to commit the changes as a new version.
+                </p>
             </div>
 
             <!-- Compare-versions modal -->
@@ -129,6 +126,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=26"></script>
 </body>
 </html>

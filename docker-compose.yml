@@ -2,8 +2,12 @@ services:
   backend:
     build: ./backend
     env_file: .env
-    environment:
-      - CSV_PATH=/app/data/Breast_Cancer-RECRUITING-phase2-625.csv
+    # No CSV_PATH override — fall back to settings.csv_path
+    # (data/breast_cancer_trials_full_2026-04-14.csv), which is the canonical
+    # 16k-trial corpus with the full 55-column schema (sponsorName,
+    # sponsorClass, studyType, etc.). The legacy
+    # Breast_Cancer-RECRUITING-phase2-625.csv has only 23 columns and is
+    # missing fields the pipeline / UI expect.
     volumes:
       # Mount the backend data dir so the trial CSV and embeddings cache are
       # both available inside the container. Read-write so the Voyage cache
@@ -20,6 +24,12 @@ services:
 
   frontend:
     build: ./frontend
+    # nginx.conf proxies /api/ to ${BACKEND_URL}. The Dockerfile default of
+    # http://localhost:8000 only works on Cloud Run (where the frontend and
+    # backend share a hostname); in docker compose we reach the backend via
+    # the service hostname on the compose network.
+    environment:
+      - BACKEND_URL=http://backend:8000
     ports:
       - "80:80"
     depends_on:

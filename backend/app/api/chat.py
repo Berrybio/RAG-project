@@ -1,5 +1,6 @@
 """Multi-turn chat endpoint for clinician-facing trial planning."""
 import json
+import logging
 import time
 from typing import Literal
 
@@ -15,12 +16,18 @@ from ..dependencies import (
     get_identity,
     get_llm,
     get_pipeline,
+    get_protocol_history_paths,
     get_source_scores,
 )
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
 from ..core.feedback_examples import FeedbackExampleStore
+from ..core.protocol_history import (
+    load_protocol,
+    match_query_to_entry,
+    query_mentions_previous_protocol,
+)
 from ..core.landscape import (
     compute_landscape,
     detect_disease,
@@ -35,6 +42,8 @@ from ..core.landscape import (
 _DIVERSIFIED_BUDGET = 12
 _OVERFETCH_POOL = 80
 from ..api.search import _to_source_doc
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -51,6 +60,11 @@ class ChatRequest(BaseModel):
     # diversification that goes with it). Useful for clinicians who already
     # know exactly what they're looking for and want a focused top-K result.
     include_landscape: bool = True
+    # Optional id of the protocol the user currently has open in the planner.
+    # When set, the backend injects a small <active_protocol> hint into the
+    # LLM context so questions like "is our sample size reasonable?" don't
+    # require pasting the protocol back into chat.
+    active_protocol_id: str = ""
 
 
 class SummarizeRequest(BaseModel):
@@ -69,6 +83,7 @@ async def chat_stream(
     aliases: dict = Depends(get_aliases),
     source_scores: dict = Depends(get_source_scores),
     examples: FeedbackExampleStore | None = Depends(get_examples),
+    history_paths=Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
@@ -153,12 +168,48 @@ async def chat_stream(
         else None
     )
 
+    user_id = (identity.get("user_id") or "anonymous").strip() or "anonymous"
+
+    # Detect "based on the previous protocol" hints in the user's message and
+    # surface ALL their stored protocols as clickable load chips in the UI.
+    # The list (capped, ranked by relevance) is also injected into the LLM's
+    # user message as a <previous_protocols> hint so the model acknowledges
+    # them rather than gaslighting the user with "no protocol exists".
+    protocol_matches: list[dict] = []
+    if query_mentions_previous_protocol(latest_query):
+        try:
+            protocol_matches = match_query_to_entry(
+                history_paths, user_id, latest_query, top_n=10,
+            )
+        except Exception:  # pragma: no cover - history is best-effort
+            logger.exception("Failed to match previous protocols for chat hint")
+
+    # Resolve the active-protocol meta + latest JSON. When the frontend passes
+    # active_protocol_id, the planner has one open in the preview pane; we
+    # surface that to the LLM so it can answer questions about the protocol
+    # without the user having to paste it back into chat.
+    active_protocol_meta: dict | None = None
+    active_protocol_json: dict | None = None
+    if body.active_protocol_id:
+        try:
+            active_protocol_json, active_protocol_meta = load_protocol(
+                history_paths, user_id, body.active_protocol_id,
+            )
+        except FileNotFoundError:
+            logger.info(
+                "chat_stream: active_protocol_id %s not found for user %s",
+                body.active_protocol_id, user_id,
+            )
+        except Exception:  # pragma: no cover - non-critical
+            logger.exception("Failed to load active protocol for chat context")
+
     log_event(
         "query_received",
         endpoint="chat_stream",
         query_text=latest_query,
         num_sources=len(retrieved),
         landscape_emitted=bool(landscape and merged_filters != prior_filters),
+        protocol_matches=len(protocol_matches) or None,
         latency_ms=int((time.monotonic() - started) * 1000),
         **identity,
     )
@@ -170,6 +221,16 @@ async def chat_stream(
         if landscape and merged_filters != prior_filters:
             yield f"event: landscape\ndata: {json.dumps(landscape)}\n\n"
 
+        # If the user said "based on the previous protocol" (or similar) and we
+        # found one or more candidates, emit them so the frontend can render
+        # clickable load chips. The reply itself proceeds normally — the chip
+        # is an additional offer, not a redirect.
+        if protocol_matches:
+            yield (
+                "event: protocol_match\n"
+                f"data: {json.dumps(protocol_matches)}\n\n"
+            )
+
         source_docs = [_to_source_doc(doc).model_dump() for doc in retrieved]
         yield f"event: sources\ndata: {json.dumps(source_docs)}\n\n"
 
@@ -177,6 +238,9 @@ async def chat_stream(
             async for token in generate_chat_stream(
                 llm, history, retrieved,
                 landscape=landscape, aliases=aliases, examples=examples,
+                previous_protocols=protocol_matches,
+                active_protocol_meta=active_protocol_meta,
+                active_protocol_json=active_protocol_json,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"

@@ -23,7 +23,90 @@ CHAT_SYSTEM_PROMPT = """\
 You are a clinical trials research assistant helping a clinician plan a breast cancer trial.
 
 You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn may \
-include two distinct context blocks:
+include up to four distinct context blocks:
+
+- <active_protocol>: when present, the user has a protocol currently open in the planner UI \
+and the block summarizes it (title, phase, conditions, design, intervention, comparator, \
+sample size, primary objectives/endpoints, eligibility excerpts). Use it to answer \
+*questions about* the protocol — sample-size sanity, endpoint choice, eligibility \
+boundaries, comparator rationale — without asking the user to paste it back.
+
+When the user provides feedback on the protocol (peer-review comments, LLM critique, or \
+a direct edit suggestion), DO NOT auto-apply or rewrite the protocol inline. Your job \
+is to advise first, then ask permission:
+
+  1. Parse the feedback into discrete items.
+  2. For each item, give a brief reasoned assessment: Is it meaningful clinically / \
+methodologically? What's the upside? What's the trade-off or risk? Cite a relevant \
+reference, guideline, or trial precedent when you reasonably can (e.g. "ICH E9 \
+recommends pre-specifying the primary analysis population", "DESTINY-Breast04 used a \
+6-month exposure window for prior anthracycline exclusions"). If you're not sure of a \
+reference, say so honestly rather than inventing one.
+  3. Flag vague items ("the endpoints feel off") and ask for clarification rather \
+than guessing.
+  4. Flag conflicts between reviewers and recommend the safer / more conservative \
+option, but let the user override.
+  5. End the reply with an explicit ask, e.g. *"Would you like me to apply items 1 \
+and 3? You can say 'apply 1 and 3' or 'go ahead'."* Do NOT emit [CHOICES] here — the \
+client recognises natural-language confirmations like "apply", "go ahead", "yes apply", \
+"make these changes" and will trigger the refinement step on the user's confirmation.
+
+If the user replies with one of those confirmation phrases on a subsequent turn, the \
+client routes that message to a separate refinement endpoint — you don't need to apply \
+the changes yourself in this conversation. Stay analytical.
+
+CONFIRMATION SAFETY NET — emit this when the user is confirming application of changes \
+you proposed in your IMMEDIATELY prior assistant turn. The trigger covers any \
+natural-language affirmation: "apply", "go ahead", "yes please make those changes", \
+"sounds good, apply 1 and 3", "yes update", "please update", "let's commit those", \
+"do it", "approved", "yep go ahead", etc. After your prose reply, append a single \
+machine-readable block on its own line:
+
+[APPLY_PROTOCOL_CHANGES]
+apply: <directive>
+[/APPLY_PROTOCOL_CHANGES]
+
+Where <directive> is one of:
+- ``all`` — apply every concrete change you proposed in your most recent prior turn.
+- ``1, 3`` (comma-separated item numbers from that prior turn's enumerated list) — \
+apply only those.
+- ``all except 2`` — apply everything proposed in the prior turn except item 2.
+
+CRITICAL behaviour in iterative refinement (multiple feedback rounds in the same \
+conversation):
+- The thread may already contain earlier rounds where the user confirmed and you \
+applied changes. The CURRENT round's proposal is whatever you proposed in your most \
+recent prior assistant turn — that is the source of truth for the directive.
+- When the user confirms, DO NOT re-litigate the prior proposal or argue against it. \
+Your immediately preceding assistant turn already laid out the items; the user has \
+now said yes. Emit the tag and a brief acknowledgement, full stop. Re-analysing the \
+items at this point is wrong — the user wants to move forward, not re-discuss.
+- "yes, please update" / "yes update" / "please update" / "please apply" / "yes \
+please" all qualify as confirmations when an immediately prior proposal exists. \
+Don't over-think the phrasing.
+
+Rules for the tag:
+- ONLY emit the tag when the user is confirming application AND your immediately prior \
+assistant turn proposed at least one concrete change. If the prior turn was a \
+clarifying question, a discussion of trade-offs without a concrete proposal, or a \
+trial-search reply, do NOT emit the tag — instead ask the user what they want to \
+apply.
+- If the user is asking a clarifying question, pushing back, or providing MORE \
+feedback (not a confirmation), do NOT emit the tag.
+- Emit at most ONE tag per reply. Never wrap it in markdown fences.
+- The tag is hidden from the user — it triggers the refinement endpoint on the client. \
+Your prose reply should be a short acknowledgement only (e.g. "Applying those now — \
+the new version will appear above the chat in a moment."). Do NOT claim the changes \
+have already been made; the refinement call writes the new version.
+
+- <previous_protocols>: when present, the user has prior protocols stored and is asking to \
+work on one. The block lists each protocol by title, version, phase, and population. Your \
+reply MUST acknowledge the listed protocol(s) by name — never say "I don't see any \
+previous protocol" or "no protocol history" when this block is present. Tell the user \
+their protocols are loaded as clickable chips below your reply and that clicking one \
+opens it for refinement. Do NOT regenerate the protocol contents inline; the chip is the \
+loading mechanism. Keep this acknowledgement brief (2-3 sentences) and DO NOT emit \
+[CHOICES] — the chips already serve as the picker.
 
 - <landscape>: deterministic aggregate statistics over the FULL matching population (total \
 trial count, status distribution, drug-class / modality counts). When the user asks \
@@ -133,12 +216,132 @@ Write in plain prose, not bullet points. Do not invent details. Finish by asking
 """
 
 
+def _format_active_protocol_block(meta: dict, protocol: dict | None) -> str:
+    """Render a compact summary of the protocol the user currently has open.
+
+    Surfaces title, phase, conditions, design, intervention, sample size, and
+    primary endpoint(s) — enough to answer most clarification questions ("is
+    our sample size reasonable?", "what's the current comparator?") without
+    pasting the full JSON. The full JSON would balloon the context window for
+    a small win since the planner rarely needs every field at once.
+    """
+    if not meta and not protocol:
+        return ""
+    src = protocol or {}
+    title = meta.get("title") if meta else src.get("title", "")
+    phase = src.get("phase") or (meta.get("phase") if meta else "") or ""
+    conditions = src.get("conditions") or (meta.get("conditions") if meta else "") or ""
+    design = src.get("study_design") or ""
+    intervention = src.get("intervention_name") or ""
+    comparator = src.get("comparator") or ""
+    enrollment = src.get("estimated_enrollment")
+    primary_endpoints = src.get("primary_endpoints") or []
+    primary_objectives = src.get("primary_objectives") or []
+    inclusion = src.get("inclusion_criteria") or []
+    exclusion = src.get("exclusion_criteria") or []
+
+    lines = [f"The user has an active protocol open in the planner: {title}"]
+    if phase:
+        lines.append(f"- Phase: {phase}")
+    if conditions:
+        lines.append(f"- Conditions: {conditions}")
+    if design:
+        lines.append(f"- Study design: {design}")
+    if intervention:
+        lines.append(f"- Intervention: {intervention}")
+    if comparator:
+        lines.append(f"- Comparator: {comparator}")
+    if enrollment:
+        lines.append(f"- Estimated enrollment: {enrollment}")
+    if primary_objectives:
+        items = "; ".join(str(x) for x in primary_objectives[:3])
+        lines.append(f"- Primary objectives: {items}")
+    if primary_endpoints:
+        items = "; ".join(str(x) for x in primary_endpoints[:3])
+        lines.append(f"- Primary endpoints: {items}")
+    if inclusion:
+        items = "; ".join(str(x) for x in inclusion[:4])
+        suffix = "" if len(inclusion) <= 4 else f" ({len(inclusion)} total)"
+        lines.append(f"- Inclusion criteria{suffix}: {items}")
+    if exclusion:
+        items = "; ".join(str(x) for x in exclusion[:4])
+        suffix = "" if len(exclusion) <= 4 else f" ({len(exclusion)} total)"
+        lines.append(f"- Exclusion criteria{suffix}: {items}")
+    lines.append(
+        "If the user asks questions about this protocol (sample size sanity, "
+        "endpoint choice, eligibility), answer using the fields above. If "
+        "they provide feedback or suggest changes, ANALYZE — give a reasoned "
+        "assessment of each item with references where possible, flag vague "
+        "or conflicting items, then ask permission to apply (see the system "
+        "prompt for the format). Do NOT auto-apply; the user's explicit "
+        "confirmation triggers the refinement endpoint client-side."
+    )
+    return "\n".join(lines)
+
+
+def _format_previous_protocols_block(entries: list[dict]) -> str:
+    """Render a hint block about previously generated protocols for the LLM.
+
+    The actual protocol JSON isn't inlined — too many tokens, and the user
+    will pick one via the load chip the frontend renders alongside this
+    reply. The LLM just needs to know the protocols *exist* and what their
+    titles are, so it doesn't gaslight the user with "I don't see any."
+    """
+    if not entries:
+        return ""
+    lines = [
+        f"The user has {len(entries)} previously generated protocol"
+        f"{'s' if len(entries) != 1 else ''} stored. "
+        "The frontend is rendering load chips alongside your reply so the user "
+        "can click to open one for refinement.",
+    ]
+    for i, e in enumerate(entries, 1):
+        title = e.get("title") or "Untitled"
+        phase = e.get("phase") or ""
+        conds = e.get("conditions") or ""
+        bits = [f"v{e.get('version_count', 1)}"]
+        if phase:
+            bits.append(phase)
+        if conds:
+            bits.append(conds[:80])
+        lines.append(f"{i}. {title} ({', '.join(bits)})")
+    lines.append(
+        "Your reply: acknowledge the available protocol(s) by name, briefly say "
+        "what you'll help refine, and tell the user to click the matching chip "
+        "below to load it. Do NOT claim the protocol does not exist or that "
+        "there is no protocol history — they are listed above. Do NOT regenerate "
+        "the protocol contents inline."
+    )
+    return "\n".join(lines)
+
+
 def _augment_with_context(
     user_content: str,
     retrieved_docs: list[dict],
     landscape: dict | None = None,
+    previous_protocols: list[dict] | None = None,
+    active_protocol_meta: dict | None = None,
+    active_protocol_json: dict | None = None,
 ) -> str:
     parts: list[str] = []
+
+    if active_protocol_meta or active_protocol_json:
+        # Active protocol block goes first — it's the strongest context cue
+        # ("the user has THIS protocol open right now") and should anchor the
+        # reply when the user asks clarification or refinement questions.
+        block = _format_active_protocol_block(
+            active_protocol_meta or {}, active_protocol_json,
+        )
+        if block:
+            parts.append(f"<active_protocol>\n{block}\n</active_protocol>")
+
+    if previous_protocols:
+        # Place the previous-protocols hint FIRST — when the user explicitly
+        # asked about a prior protocol, that intent should anchor the reply,
+        # not the trial list (which the planner will retrieve anyway).
+        block = _format_previous_protocols_block(previous_protocols)
+        if block:
+            parts.append(f"<previous_protocols>\n{block}\n</previous_protocols>")
 
     if landscape:
         landscape_text = format_landscape_for_llm(landscape)
@@ -168,6 +371,9 @@ async def generate_chat_stream(
     landscape: dict | None = None,
     aliases: dict[str, str] | None = None,
     examples: FeedbackExampleStore | None = None,
+    previous_protocols: list[dict] | None = None,
+    active_protocol_meta: dict | None = None,
+    active_protocol_json: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
@@ -179,6 +385,11 @@ async def generate_chat_stream(
     `examples` is the up-voted few-shot store; the most similar past
     (question, answer) pair is appended to the system prompt to anchor the
     reply structure on what the user has already endorsed.
+    `previous_protocols` (when provided) is the list of stored protocols
+    matched to the user's NL hint ("based on the previous protocol", etc.).
+    Their meta is injected into the user message as a hint block so the LLM
+    knows to acknowledge them rather than gaslight the user with "no
+    protocol exists."
     """
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("Chat history must end with a user message")
@@ -186,7 +397,14 @@ async def generate_chat_stream(
     augmented = list(messages)
     augmented[-1] = {
         "role": "user",
-        "content": _augment_with_context(messages[-1]["content"], retrieved_docs, landscape),
+        "content": _augment_with_context(
+            messages[-1]["content"],
+            retrieved_docs,
+            landscape,
+            previous_protocols,
+            active_protocol_meta=active_protocol_meta,
+            active_protocol_json=active_protocol_json,
+        ),
     }
 
     system_prompt = CHAT_SYSTEM_PROMPT

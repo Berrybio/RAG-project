@@ -9,6 +9,7 @@ from .core.feedback_examples import FeedbackExampleStore
 from .core.feedback_reranker import compute_source_scores
 from .core.llm import BaseLLMProvider, get_llm_provider
 from .core.pipeline import ClinicalTrialRAG
+from .core.protocol_history import ProtocolHistoryPaths
 
 
 @asynccontextmanager
@@ -37,6 +38,8 @@ async def lifespan(app: FastAPI):
     # already feels the change without restarting the server.
     app.state.source_scores = compute_source_scores(feedback_paths)
     app.state.examples = FeedbackExampleStore.load(feedback_paths)
+    # Per-user protocol history: created lazily under data/protocols/<user_id>/.
+    app.state.protocol_history_paths = ProtocolHistoryPaths.from_data_dir(data_dir)
     yield
 
 
@@ -59,6 +62,10 @@ def get_source_scores(request: Request) -> dict[str, float]:
 
 def get_examples(request: Request) -> "FeedbackExampleStore | None":
     return getattr(request.app.state, "examples", None)
+
+
+def get_protocol_history_paths(request: Request) -> ProtocolHistoryPaths:
+    return request.app.state.protocol_history_paths
 
 
 def get_identity(request: Request) -> dict[str, str | None]:

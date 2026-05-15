@@ -29,6 +29,8 @@ backend/data/embeddings_cache/
 # Runtime feedback log + curated alias dictionary (per-deployment, not source)
 backend/data/user_feedback.jsonl
 backend/data/drug_aliases.json
+# Per-user generated protocols (runtime artifact, not source)
+backend/data/protocols/
 
 # Generated outputs
 *.docx

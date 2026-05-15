@@ -198,10 +198,14 @@ const plannerState = {
   // used for downloads.
   protocolVersions: [],    // [{label, protocol, userRequest, assistantNote, changedFields, timestamp}]
   activeVersion: -1,
-  refineMessages: [],      // [{role:'user'|'assistant', content:string}] for /protocol/refine
+  // Server-side id from /api/protocol/json — passed with each refinement so
+  // versions accumulate on the backend in the same history entry.
+  activeProtocolId: "",
 };
 
 const plannerEls = () => ({
+  recentBar: document.getElementById("planner-recent-protocols"),
+  recentList: document.getElementById("planner-recent-protocols-list"),
   messagesBox: document.getElementById("planner-messages"),
   input: document.getElementById("planner-input"),
   sendBtn: document.getElementById("planner-send-btn"),
@@ -221,9 +225,6 @@ const plannerEls = () => ({
   downloadPdfBtn: document.getElementById("planner-download-pdf-btn"),
   versionList: document.getElementById("planner-version-list"),
   compareBtn: document.getElementById("planner-compare-btn"),
-  refineThread: document.getElementById("planner-refine-thread"),
-  refineInput: document.getElementById("planner-refine-input"),
-  refineSendBtn: document.getElementById("planner-refine-send-btn"),
   diffModal: document.getElementById("planner-diff-modal"),
   diffFrom: document.getElementById("planner-diff-from"),
   diffTo: document.getElementById("planner-diff-to"),
@@ -239,6 +240,159 @@ function addChatMessage(role, content) {
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
   return div;
+}
+
+// ---- Recent protocols (history strip) -------------------------------------
+
+function formatRelativeTime(iso) {
+  if (!iso) return "";
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return "";
+  const diff = Date.now() - ts;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.round(hr / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+async function refreshRecentProtocols(maxToShow = 6) {
+  const e = plannerEls();
+  if (!e.recentBar || !e.recentList) return;
+  try {
+    const resp = await apiFetch(`${API_BASE}/protocols`);
+    if (!resp.ok) throw new Error(`/protocols ${resp.status}`);
+    const data = await resp.json();
+    const rows = (data.protocols || []).slice(0, maxToShow);
+    e.recentList.innerHTML = "";
+    if (rows.length === 0) {
+      e.recentBar.classList.add("hidden");
+      return;
+    }
+    rows.forEach((entry) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "recent-protocols-chip";
+      const title = document.createElement("span");
+      title.textContent = entry.title || "Untitled";
+      chip.appendChild(title);
+      const meta = document.createElement("span");
+      meta.className = "recent-protocols-chip-meta";
+      const versionPart = entry.version_count > 1 ? `v${entry.version_count} · ` : "";
+      meta.textContent = `· ${versionPart}${formatRelativeTime(entry.last_modified || entry.created_at)}`;
+      chip.appendChild(meta);
+      chip.title = (entry.summary_brief || "") + "\n" + (entry.intervention_name || "");
+      chip.addEventListener("click", () => loadProtocolFromHistory(entry.id));
+      e.recentList.appendChild(chip);
+    });
+    e.recentBar.classList.remove("hidden");
+  } catch (err) {
+    // Don't toast on the strip — it's optional UX. Just hide it.
+    console.warn("Failed to load recent protocols:", err);
+    e.recentBar.classList.add("hidden");
+  }
+}
+
+async function loadProtocolFromHistory(protocolId) {
+  if (!protocolId) return;
+  try {
+    // Ask the backend for the full version history alongside the latest
+    // protocol so the version chip strip rebuilds with every prior version
+    // — not just the one we're loading. This is what lets compare-any-two
+    // work across sessions (otherwise the chips would reset and the user
+    // would lose access to earlier versions on disk).
+    const url = `${API_BASE}/protocols/${encodeURIComponent(protocolId)}?include_versions=true`;
+    const resp = await apiFetch(url);
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    const data = await resp.json();
+    const protocol = data.protocol;
+    const meta = data.meta || {};
+    plannerState.currentProtocol = protocol;
+    plannerState.activeProtocolId = meta.id || protocolId;
+
+    // Rebuild protocolVersions from the server's all_versions list. Fall
+    // back to a single-entry list if the server returned nothing (e.g. an
+    // older deployment without this endpoint capability).
+    const allVersions = Array.isArray(data.all_versions) ? data.all_versions : [];
+    if (allVersions.length > 0) {
+      plannerState.protocolVersions = allVersions.map((v) => {
+        const isInitial = v.version === 1;
+        const baseLabel = `v${v.version}`;
+        const label = isInitial ? `${baseLabel} (original)` : baseLabel;
+        return {
+          label,
+          protocol: v.protocol,
+          userRequest: v.user_request || null,
+          assistantNote:
+            v.assistant_note ||
+            (isInitial ? "Initial generation from the planning brief." : ""),
+          changedFields: v.changed_fields || [],
+          timestamp: v.timestamp || meta.last_modified || meta.created_at || new Date().toISOString(),
+        };
+      });
+      // Active version: whichever the load endpoint returned (default
+      // latest). Match by version number against the rebuilt list.
+      const targetVersion = data.version || meta.version_count || allVersions[allVersions.length - 1].version;
+      plannerState.activeVersion = plannerState.protocolVersions.findIndex(
+        (_, idx) => allVersions[idx].version === targetVersion,
+      );
+      if (plannerState.activeVersion < 0) {
+        plannerState.activeVersion = plannerState.protocolVersions.length - 1;
+      }
+    } else {
+      // Legacy fallback — single-entry strip.
+      plannerState.protocolVersions = [{
+        label: `v${data.version || meta.version_count || 1} (loaded)`,
+        protocol,
+        userRequest: null,
+        assistantNote: `Loaded from history: ${meta.title || "(no title)"}`,
+        changedFields: [],
+        timestamp: meta.last_modified || meta.created_at || new Date().toISOString(),
+      }];
+      plannerState.activeVersion = 0;
+    }
+    plannerState.lastSummary = meta.summary_brief || plannerState.lastSummary;
+    const e = plannerEls();
+    renderVersionBar();
+    renderProtocolPreview(protocol, "planner-protocol-preview");
+    e.protocolResult.classList.remove("hidden");
+    e.protocolResult.scrollIntoView({ behavior: "smooth", block: "start" });
+    showToast(`Loaded: ${meta.title || "protocol"} (${plannerState.protocolVersions.length} version${plannerState.protocolVersions.length === 1 ? "" : "s"})`);
+  } catch (err) {
+    showToast(`Failed to load protocol: ${err.message}`, "error");
+  }
+}
+
+function attachProtocolMatchBar(messageDiv, matches) {
+  if (!matches || matches.length === 0) return;
+  const bar = document.createElement("div");
+  bar.className = "protocol-match-bar";
+  const label = document.createElement("span");
+  label.className = "protocol-match-bar-label";
+  label.textContent =
+    matches.length === 1
+      ? "I found a previously generated protocol — load it to edit?"
+      : `Found ${matches.length} matching protocols — pick one to load:`;
+  bar.appendChild(label);
+  matches.forEach((entry) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "recent-protocols-chip";
+    const title = document.createElement("span");
+    title.textContent = entry.title || "Untitled";
+    chip.appendChild(title);
+    const meta = document.createElement("span");
+    meta.className = "recent-protocols-chip-meta";
+    const versionPart = entry.version_count > 1 ? `v${entry.version_count} · ` : "";
+    meta.textContent = `· ${versionPart}${formatRelativeTime(entry.last_modified || entry.created_at)}`;
+    chip.appendChild(meta);
+    chip.addEventListener("click", () => loadProtocolFromHistory(entry.id));
+    bar.appendChild(chip);
+  });
+  messageDiv.appendChild(bar);
 }
 
 // Map raw enum-style filter values to clinician-friendly labels.
@@ -535,6 +689,25 @@ function attachSourcesToMessage(messageDiv, sources) {
   messageDiv.appendChild(details);
 }
 
+// Parse the machine-readable [APPLY_PROTOCOL_CHANGES] block the chat planner
+// emits when it interprets the user's reply as a confirmation to apply
+// previously-proposed changes. This is the safety net for natural-language
+// confirmations that the strict isApplyConfirmation whitelist misses
+// ("sounds good, please make those changes", "yep, go ahead with that").
+//
+// Returns { cleanText, applyDirective }:
+//   cleanText        – the prose with the tag stripped (what gets shown).
+//   applyDirective   – string like "all" / "1, 3" / "all except 2", or
+//                      null if the tag wasn't present.
+function extractApplyDirective(text) {
+  const re = /\[APPLY_PROTOCOL_CHANGES\]\s*apply:\s*([^\n\[]+?)\s*\[\/APPLY_PROTOCOL_CHANGES\]/i;
+  const m = text.match(re);
+  if (!m) return { cleanText: text, applyDirective: null };
+  const directive = (m[1] || "").trim();
+  const cleanText = text.replace(re, "").trim();
+  return { cleanText, applyDirective: directive || "all" };
+}
+
 // Parse a [CHOICES] ... [/CHOICES] block out of assistant text and return
 // { cleanText, choices: string[] }. Tolerates leading whitespace and
 // preserves the prose before the block as the visible message.
@@ -585,7 +758,7 @@ function resetPlanner() {
   plannerState.currentProtocol = null;
   plannerState.protocolVersions = [];
   plannerState.activeVersion = -1;
-  plannerState.refineMessages = [];
+  plannerState.activeProtocolId = "";
   const e = plannerEls();
   e.messagesBox.innerHTML = "";
   e.summarizeBtn.classList.add("hidden");
@@ -593,8 +766,6 @@ function resetPlanner() {
   e.protocolLoading.classList.add("hidden");
   e.protocolResult.classList.add("hidden");
   e.input.value = "";
-  if (e.refineThread) e.refineThread.innerHTML = "";
-  if (e.refineInput) e.refineInput.value = "";
   if (e.versionList) e.versionList.innerHTML = "";
   if (e.compareBtn) e.compareBtn.disabled = true;
 }
@@ -610,13 +781,35 @@ async function plannerSend() {
   e.sendBtn.disabled = true;
   e.sendBtn.textContent = "Thinking...";
 
-  // Create assistant bubble to stream into
+  // Create assistant bubble (used for either streamed chat or in-place refinement)
   const assistantDiv = addChatMessage("assistant", "");
   const contentNode = document.createTextNode("");
   assistantDiv.appendChild(contentNode);
+
+  // Two-stage refinement flow:
+  //   1) User pastes feedback or asks for an edit → goes to chat/stream.
+  //      The planner analyzes each item (rationale, references, trade-offs)
+  //      and ends by asking permission to apply.
+  //   2) Only when the user *confirms* with an explicit phrase ("apply",
+  //      "go ahead", "yes apply 1 and 3", etc.) does the client route to
+  //      the refine endpoint — which sees the full conversation including
+  //      the prior assistant proposal and applies the confirmed subset.
+  // This keeps the assistant honest: it never silently rewrites the
+  // protocol; the user is always asked first.
+  if (isApplyConfirmation(query)) {
+    try {
+      await applyRefinementInChat(query, assistantDiv, contentNode);
+    } finally {
+      e.sendBtn.disabled = false;
+      e.sendBtn.textContent = "Send";
+    }
+    return;
+  }
+
   let assistantText = "";
   let finished = false;
   let streamSources = [];
+  let protocolMatches = [];
 
   try {
     const resp = await apiFetch(`${API_BASE}/chat/stream`, {
@@ -626,6 +819,11 @@ async function plannerSend() {
         messages: plannerState.messages,
         top_k: parseInt(e.topk.value),
         include_landscape: e.showLandscape.checked,
+        // Active protocol context: when set, the backend injects a brief
+        // <active_protocol> hint into the system context so the model can
+        // answer questions about the open protocol without the user having
+        // to paste it back into chat.
+        active_protocol_id: plannerState.activeProtocolId || "",
       }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
@@ -664,6 +862,8 @@ async function plannerSend() {
           } catch {}
         } else if (evt === "sources") {
           try { streamSources = JSON.parse(data); } catch { streamSources = []; }
+        } else if (evt === "protocol_match") {
+          try { protocolMatches = JSON.parse(data); } catch { protocolMatches = []; }
         } else if (evt === "token") {
           try {
             assistantText += JSON.parse(data);
@@ -685,12 +885,19 @@ async function plannerSend() {
       contentNode.nodeValue = assistantText;
     }
 
+    // Strip the [APPLY_PROTOCOL_CHANGES] safety-net tag if present. This is
+    // the planner's signal that it interpreted the user's reply as a
+    // confirmation (even if the strict isApplyConfirmation heuristic missed
+    // it). We act on it by triggering refine right after the chat reply.
+    const applyParse = extractApplyDirective(assistantText);
+    let cleanedForChoices = applyParse.cleanText;
+
     // Strip any [CHOICES] block out of the bubble text and render the
     // options as clickable chips below the message. The full (unstripped)
     // text goes into conversation history so the model can see what it
     // offered, but the UI only shows the prose and the chips.
-    const { cleanText, choices } = extractChoices(assistantText);
-    if (choices.length > 0) {
+    const { cleanText, choices } = extractChoices(cleanedForChoices);
+    if (choices.length > 0 || applyParse.applyDirective) {
       contentNode.nodeValue = cleanText;
     }
 
@@ -698,16 +905,39 @@ async function plannerSend() {
     // (NCT followed by 8 digits) to clinicaltrials.gov so the clinician can
     // click through to the source. Done after streaming completes — easier
     // than diffing partial tokens that may split an NCT ID across chunks.
-    const finalText = choices.length > 0 ? cleanText : assistantText;
+    const finalText = (choices.length > 0 || applyParse.applyDirective)
+      ? cleanText : assistantText;
     const linkified = linkifyNctIds(finalText);
     assistantDiv.replaceChild(linkified, contentNode);
 
-    // Persist assistant turn (keep original text in history for LLM context).
-    plannerState.messages.push({ role: "assistant", content: assistantText });
+    // Persist assistant turn — store the CLEAN version (tag stripped) so
+    // the refine endpoint's view of the conversation doesn't contain the
+    // tag itself. The directive still tells us what to apply.
+    const persistedAssistantText = applyParse.applyDirective ? cleanText : assistantText;
+    plannerState.messages.push({ role: "assistant", content: persistedAssistantText });
     attachSourcesToMessage(assistantDiv, streamSources);
     attachChoicesToMessage(assistantDiv, choices);
     attachFeedbackBar(assistantDiv, assistantText, streamSources);
+    attachProtocolMatchBar(assistantDiv, protocolMatches);
     revealPlannerActions();
+
+    // Safety-net trigger: the planner emitted an apply directive, meaning
+    // it interpreted the user's reply as confirmation. Kick off the refine
+    // call now. The refine response renders as a NEW assistant bubble below
+    // the analytical reply so the user sees: (1) "Applying those now…",
+    // then (2) the actual list of changes applied.
+    if (applyParse.applyDirective) {
+      const applyDiv = addChatMessage("assistant", "");
+      const applyNode = document.createTextNode("");
+      applyDiv.appendChild(applyNode);
+      try {
+        // Pass the user's actual confirmation text (e.g. "yes please apply")
+        // as userText so the version chip's tooltip reads naturally.
+        await applyRefinementInChat(query, applyDiv, applyNode);
+      } catch (err) {
+        applyNode.nodeValue = `Failed to apply changes: ${err.message}`;
+      }
+    }
   } catch (err) {
     assistantText = assistantText || `Error: ${err.message}`;
     contentNode.nodeValue = assistantText;
@@ -765,6 +995,7 @@ async function plannerGenerateProtocol() {
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
     plannerState.currentProtocol = data.protocol;
+    plannerState.activeProtocolId = data.protocol_id || "";
     plannerState.protocolVersions = [{
       label: "v1 (original)",
       protocol: data.protocol,
@@ -774,11 +1005,11 @@ async function plannerGenerateProtocol() {
       timestamp: new Date().toISOString(),
     }];
     plannerState.activeVersion = 0;
-    plannerState.refineMessages = [];
     renderVersionBar();
-    if (e.refineThread) e.refineThread.innerHTML = "";
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
+    // Refresh the recent-protocols strip since a new entry was just saved.
+    refreshRecentProtocols();
   } catch (err) {
     alert(`Failed to generate protocol: ${err.message}`);
   } finally {
@@ -826,84 +1057,147 @@ function switchToVersion(idx) {
   renderProtocolPreview(versions[idx].protocol, "planner-protocol-preview");
 }
 
-function appendRefineMessage(role, content, changedFields) {
-  const e = plannerEls();
-  const div = document.createElement("div");
-  div.className = `refine-msg ${role}`;
-  div.textContent = content;
-  if (role === "assistant" && changedFields && changedFields.length) {
-    const note = document.createElement("div");
-    note.className = "changed-fields";
-    note.textContent = `Changed: ${changedFields.join(", ")}`;
-    div.appendChild(note);
-  }
-  e.refineThread.appendChild(div);
-  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+// Heuristic: detect an explicit "apply the proposed changes" confirmation
+// after the assistant has analyzed feedback. Strict whitelist of phrases so
+// we don't conflate confirmation with unrelated affirmatives ("yes, that's
+// a HER2-positive trial"). Returns false when no protocol is loaded —
+// without an active protocol there's nothing to refine.
+//
+// Why a whitelist (not natural language): the alternative is sending every
+// turn to the LLM to decide intent, which doubles the round-trips and adds
+// latency before the refine call. A short, clear phrase set covers the
+// common confirmation forms ("apply", "go ahead", "yes apply", "apply 1 and
+// 3", "approved") and the system prompt asks the model to suggest one of
+// those phrasings in its question.
+function isApplyConfirmation(text) {
+  if (!plannerState.currentProtocol) return false;
+  const lower = (text || "").toLowerCase().trim();
+  if (!lower) return false;
+
+  // Normalise: trim trailing punctuation so "apply." and "yes, please update!" land
+  // on the same patterns. Collapse internal whitespace.
+  const norm = lower.replace(/[.!?]+$/, "").replace(/\s+/g, " ").trim();
+
+  // Action verbs that signal "commit the proposed changes".
+  const ACTION = "(apply|update|commit|incorporate|proceed|go ahead|do it|make (the|these|those)? ?changes?|approved?|confirmed?)";
+  // Optional polite/affirmative prefix: "yes,? please ", "please ", "yes ", "yep ",
+  // "ok ", "sure ", "let's ", "let me know", etc.
+  const PREFIX = "(yes,?\\s*)?(please\\s+)?";
+
+  const patterns = [
+    // The bulk of confirmation phrasings — affirmative prefix + action verb +
+    // optional object ("it", "them", "the changes", "1 and 3", etc.).
+    new RegExp("^" + PREFIX + ACTION + "( (it|them|all|now|please|the changes?|these changes?|those changes?|the feedback|the edits?|the protocol|the report|the draft))?$", "i"),
+    // "yes please" / "yes, please" alone (when the prior turn proposed something it
+    // unambiguously means apply).
+    /^yes,?\s*please$/,
+    /^yes,?\s*update$/,
+    // "apply 1 and 3" / "apply items 1, 2"
+    /^(yes,?\s*)?(please\s+)?apply (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    // "update items 1 and 3" / "commit 1, 3"
+    /^(yes,?\s*)?(please\s+)?(update|commit) (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    // "all except 2" / "skip 2 and apply the rest"
+    /^(apply )?all except (item ?s? )?\d+([\s,]+(and\s+)?\d+)*$/,
+    /^skip (item ?s? )?\d+([\s,]+(and\s+)?\d+)*[, ]+(apply )?(the )?(rest|others?|remaining)$/,
+    // "go ahead and update" / "let's apply" / "let's commit those"
+    /^(go ahead and|let'?s) (apply|update|commit|do it|proceed|make (the|these|those)? ?changes?)( (it|them|all|the changes?|these changes?|those changes?))?$/,
+    // "sounds good, apply" / "looks good, go ahead"
+    /^(sounds?|looks?) good,?\s*(apply|do it|proceed|go ahead|update|commit)$/,
+    // Bare interjections that, when a protocol is active, almost always mean
+    // confirm. We keep these short — anything longer goes through the LLM safety net.
+    /^(yep|yup|yeah)$/,
+    /^(ok|okay|sure),?\s*(apply|update|do it|proceed|go ahead|commit)$/,
+  ];
+  return patterns.some((re) => re.test(norm));
 }
 
-async function plannerSendRefinement() {
-  const e = plannerEls();
-  const text = e.refineInput.value.trim();
-  if (!text || !plannerState.currentProtocol) return;
+// Stream-like UX even though /api/protocol/refine is sync: while the request
+// is in flight the assistant bubble shows a "working" message, then we replace
+// it with the assistant_message + a green "Changes applied" bar listing the
+// changed fields. Preview + version chips update inline.
+async function applyRefinementInChat(userText, assistantDiv, contentNode) {
+  if (!plannerState.currentProtocol) {
+    // Shouldn't happen — caller already gated on isRefinementIntent which
+    // requires a current protocol — but defend anyway.
+    const msg = "I don't have an active protocol to refine. Generate one first via the planner summary flow.";
+    contentNode.nodeValue = msg;
+    plannerState.messages.push({ role: "assistant", content: msg });
+    return;
+  }
 
-  appendRefineMessage("user", text);
-  plannerState.refineMessages.push({ role: "user", content: text });
-  e.refineInput.value = "";
-  e.refineSendBtn.disabled = true;
-  e.refineSendBtn.textContent = "Updating...";
-
-  // Show a placeholder assistant bubble that we'll replace once the response lands.
-  const pendingDiv = document.createElement("div");
-  pendingDiv.className = "refine-msg assistant";
-  pendingDiv.textContent = "Updating the protocol...";
-  e.refineThread.appendChild(pendingDiv);
-  e.refineThread.scrollTop = e.refineThread.scrollHeight;
+  contentNode.nodeValue = "Applying changes to the protocol…";
 
   try {
+    // Build the refine API's message list from the planner conversation so
+    // the model sees the dialogue context, not just this single turn.
+    const refineMessages = plannerState.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+    // The user's current request was already pushed onto plannerState.messages
+    // by the caller, so it's the last entry of refineMessages.
+
     const resp = await apiFetch(`${API_BASE}/protocol/refine`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         protocol: plannerState.currentProtocol,
-        refinement_messages: plannerState.refineMessages,
+        refinement_messages: refineMessages,
         original_summary: plannerState.lastSummary,
+        protocol_id: plannerState.activeProtocolId || "",
       }),
     });
     if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
     const data = await resp.json();
 
-    // Replace pending bubble with the real assistant note + changed-fields tag.
-    pendingDiv.remove();
     const note = data.assistant_message
       || (data.changed_fields && data.changed_fields.length
             ? `Updated ${data.changed_fields.join(", ")}.`
             : "Protocol updated.");
-    appendRefineMessage("assistant", note, data.changed_fields || []);
-    plannerState.refineMessages.push({ role: "assistant", content: note });
+    contentNode.nodeValue = note;
+    plannerState.messages.push({ role: "assistant", content: note });
 
     // Append a new version and switch to it.
     const nextNum = plannerState.protocolVersions.length + 1;
     plannerState.protocolVersions.push({
       label: `v${nextNum}`,
       protocol: data.protocol,
-      userRequest: text,
+      userRequest: userText,
       assistantNote: note,
       changedFields: data.changed_fields || [],
       timestamp: new Date().toISOString(),
     });
     plannerState.activeVersion = plannerState.protocolVersions.length - 1;
     plannerState.currentProtocol = data.protocol;
+    if (data.protocol_id) plannerState.activeProtocolId = data.protocol_id;
     renderVersionBar();
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
+    refreshRecentProtocols();
+
+    // Attach a green "Changes applied" bar showing which fields changed +
+    // the new version label, so the chat surface tells the same story as the
+    // version chips above.
+    attachAppliedBar(assistantDiv, data.changed_fields || [], `v${nextNum}`);
   } catch (err) {
-    pendingDiv.remove();
-    appendRefineMessage("assistant", `Failed to apply correction: ${err.message}`, []);
-    // Pop the user message off the refine history so retrying doesn't re-send it.
-    plannerState.refineMessages.pop();
-  } finally {
-    e.refineSendBtn.disabled = false;
-    e.refineSendBtn.textContent = "Send correction";
+    const msg = `Failed to apply changes: ${err.message}`;
+    contentNode.nodeValue = msg;
+    plannerState.messages.push({ role: "assistant", content: msg });
   }
+}
+
+function attachAppliedBar(messageDiv, changedFields, versionLabel) {
+  const bar = document.createElement("div");
+  bar.className = "protocol-applied-bar";
+  const label = document.createElement("div");
+  label.className = "protocol-applied-bar-label";
+  label.textContent = `Changes applied — new version ${versionLabel} is now active. Scroll up to see the updated protocol.`;
+  bar.appendChild(label);
+  if (changedFields && changedFields.length) {
+    const list = document.createElement("div");
+    list.className = "protocol-applied-bar-changes";
+    list.textContent = `Modified fields: ${changedFields.join(", ")}`;
+    bar.appendChild(list);
+  }
+  messageDiv.appendChild(bar);
 }
 
 // ===================== VERSION DIFF =====================
@@ -1370,18 +1664,8 @@ function adminInit() {
     }
   });
 
-  // Refinement panel + version controls
-  if (e.refineSendBtn) {
-    e.refineSendBtn.addEventListener("click", plannerSendRefinement);
-  }
-  if (e.refineInput) {
-    e.refineInput.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter" && !evt.shiftKey) {
-        evt.preventDefault();
-        plannerSendRefinement();
-      }
-    });
-  }
+  // Version controls (refinement now happens inline in the main planner chat
+  // — see plannerSend / applyRefinementInChat — so no dedicated refine input).
   if (e.compareBtn) e.compareBtn.addEventListener("click", openDiffModal);
   if (e.diffCloseBtn) e.diffCloseBtn.addEventListener("click", closeDiffModal);
   if (e.diffModal) {
@@ -1393,4 +1677,8 @@ function adminInit() {
 
   // Initialize the admin panel if ?admin=1 is in the URL.
   adminInit();
+
+  // Populate the recent-protocols strip on page load. Best-effort: failures
+  // are logged but not toasted (the strip is auxiliary, not blocking).
+  refreshRecentProtocols();
 })();

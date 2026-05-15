@@ -184,12 +184,40 @@ async def generate_protocol_json(
 
 
 REFINE_SYSTEM_PROMPT = """\
-You are revising an existing breast-cancer study protocol JSON in response to a
-clinician's correction request. The clinician has reviewed the draft and is
-pointing out a factual or design error, or asking for a targeted change.
+You are revising an existing breast-cancer study protocol JSON. The request
+may take one of three shapes:
+
+(a) A single targeted edit ("change the comparator to pembrolizumab").
+(b) A longer block of feedback pasted in from a peer reviewer or another LLM
+    that lists multiple discrete changes ("Reviewer 1 says: 1) tighten
+    inclusion criterion #3; 2) add an exclusion for prior anthracycline…").
+(c) A short confirmation of changes you (the assistant) previously proposed
+    in this conversation ("apply", "go ahead", "yes apply 1 and 3",
+    "make these changes"). In this case, look back at your most recent
+    assistant turn(s) in the refinement_messages for the proposed changes
+    you advised, and apply exactly the subset the user confirmed:
+       - "apply" / "apply all" / "go ahead" / "approved" / "do it" → apply
+         every concrete change you had proposed.
+       - "apply 1 and 3" / "apply items 2, 4" → apply only those numbered
+         items.
+       - "skip 2" / "all except 2" → apply everything proposed except item 2.
+    If the conversation has no clearly-proposed set of changes (e.g. the
+    user said "apply" with nothing to apply), return the protocol unchanged
+    and explain in the NOTE: line.
+
+When the request is multi-point feedback that hasn't been pre-discussed:
+- Parse it into discrete actionable items first (don't conflate two reviewer
+  comments into one change).
+- Apply EACH item that is a clear, concrete edit. If an item is vague ("the
+  endpoints don't feel right") or asks a question rather than requesting a
+  change, leave that section alone and note it in the NOTE: line below.
+- When two reviewers conflict (e.g. one says "broaden eligibility", another
+  "tighten ECOG"), prefer the more conservative / safer option for clinical
+  trial enrollment and call out the conflict in the NOTE: so the user can
+  override.
 
 Your job:
-1. Apply the requested change accurately and propagate any DIRECTLY IMPLIED
+1. Apply the requested change(s) accurately and propagate any DIRECTLY IMPLIED
    downstream consistency fixes. For example, if the clinician corrects the
    control arm from "investigator's choice chemotherapy" to "pembrolizumab
    monotherapy", you must also fix:
@@ -210,15 +238,22 @@ listing the keys you modified, comma-separated, e.g.
    CHANGES: comparator, primary_objectives, intervention_description
 
 Then on the next line, write a single line starting with "NOTE:" with a short
-(1-2 sentence) plain-English summary of what changed and why, addressed to the
-clinician (e.g. "Updated the control arm to pembrolizumab monotherapy and
-removed the 'chemotherapy' framing — pembrolizumab is a PD-1 immune checkpoint
-inhibitor, not a cytotoxic chemotherapy.").
+plain-English summary of what changed and why, addressed to the clinician.
+For multi-point feedback, structure the NOTE as a brief enumerated list so the
+clinician can audit each change against the original feedback. Example:
+
+   NOTE: Applied 4 of 5 feedback items. (1) Tightened inclusion criterion #3
+   to require ECOG 0-1. (2) Added exclusion for prior anthracycline exposure
+   within 12 months. (3) Updated sample size to 180 with revised power
+   calculation. (4) Switched primary endpoint timepoint to 6 months.
+   Reviewer 2's item about "considering an active comparator" was left for
+   your decision — the current single-arm design is intentional for the
+   Phase II setting; let me know if you want me to redesign as a 2-arm trial.
 
 Output format (no markdown fences):
 <full JSON object>
 CHANGES: <comma-separated keys>
-NOTE: <short summary>
+NOTE: <short summary or enumerated list of applied items>
 
 Follow all the same domain conventions as the original protocol prompt:
 - Empty admin fields stay empty.
