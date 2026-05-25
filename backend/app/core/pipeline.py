@@ -1,5 +1,6 @@
 import logging
 import re
+from pathlib import Path
 
 from .data import build_documents, load_clinical_trials
 from .feedback_reranker import adjust_scores
@@ -510,14 +511,18 @@ class ClinicalTrialRAG:
         llm: BaseLLMProvider,
         retriever_type: str = "voyage",
         voyage_api_key: str = "",
+        embeddings_cache_dir: "Path | None" = None,
     ):
         logger.info("Loading clinical trial data from %s", csv_path)
+        self.csv_path = csv_path
         self.df = load_clinical_trials(csv_path)
         self.documents = build_documents(self.df)
 
         if retriever_type == "voyage" and voyage_api_key:
             logger.info("Using Voyage AI dense retriever")
-            self.retriever = VoyageRetriever(self.documents, api_key=voyage_api_key)
+            self.retriever = VoyageRetriever(
+                self.documents, api_key=voyage_api_key, cache_dir=embeddings_cache_dir,
+            )
         else:
             if retriever_type == "voyage" and not voyage_api_key:
                 logger.warning("Voyage API key not set — falling back to TF-IDF retriever")
