@@ -100,6 +100,8 @@ class HealthResponse(BaseModel):
     status: str
     trials_loaded: int
     model: str
+    data_source: str = "local"
+    csv_updated_at: str | None = None
 
 
 # ---------------------------------------------------------------------------

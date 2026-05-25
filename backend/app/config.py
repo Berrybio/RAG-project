@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
+    # ----- GCS (data storage, decoupled from Docker image) -----
+    data_source: str = "local"  # "local" or "gcs"
+    gcs_bucket: str = ""
+    gcs_csv_blob: str = "data/breast_cancer_trials.csv"
+    gcs_embeddings_prefix: str = "data/embeddings_cache/"
+
     log_level: str = "info"
     allowed_origins: str = "http://localhost:3000,http://localhost:80,http://localhost:5173"
 

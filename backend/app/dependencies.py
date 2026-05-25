@@ -29,6 +29,18 @@ def _init_supabase():
         return None
 
 
+def _resolve_data_paths() -> tuple[str, "Path | None"]:
+    """Return (csv_path, embeddings_cache_dir) based on data_source config."""
+    if settings.data_source == "gcs":
+        from .core.gcs_storage import download_csv, download_embeddings
+
+        logger.info("data_source=gcs — downloading from gs://%s", settings.gcs_bucket)
+        csv_path = str(download_csv(settings.gcs_bucket, settings.gcs_csv_blob))
+        cache_dir = download_embeddings(settings.gcs_bucket, settings.gcs_embeddings_prefix)
+        return csv_path, cache_dir
+    return settings.csv_path, None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Construct the LLM client + RAG pipeline + feedback paths once at startup.
@@ -36,16 +48,18 @@ async def lifespan(app: FastAPI):
     Everything lives on app.state so request handlers can pull what they need
     via FastAPI dependencies; there's no per-request construction cost.
     """
+    csv_path, embeddings_cache_dir = _resolve_data_paths()
     llm = get_llm_provider()
     pipeline = ClinicalTrialRAG(
-        csv_path=settings.csv_path,
+        csv_path=csv_path,
         llm=llm,
         retriever_type=settings.retriever_type,
         voyage_api_key=settings.voyage_api_key,
+        embeddings_cache_dir=embeddings_cache_dir,
     )
     supabase_client = _init_supabase()
     analytics.configure(supabase_client)
-    data_dir = Path(settings.csv_path).resolve().parent
+    data_dir = Path(csv_path).resolve().parent
     feedback_paths = FeedbackPaths.from_data_dir(data_dir, supabase_client=supabase_client)
     app.state.pipeline = pipeline
     app.state.llm = llm

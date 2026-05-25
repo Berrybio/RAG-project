@@ -65,12 +65,19 @@ class VoyageRetriever(BaseRetriever):
     EMBED_MODEL = "voyage-3"
     BATCH_SIZE = 128  # Voyage API limit per request
     MAX_DOC_CHARS = 16000  # truncate long docs to stay within token limits
-    CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "embeddings_cache"
+    DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "embeddings_cache"
 
-    def __init__(self, documents: list[dict], api_key: str, use_cache: bool = True):
+    def __init__(
+        self,
+        documents: list[dict],
+        api_key: str,
+        use_cache: bool = True,
+        cache_dir: Path | None = None,
+    ):
         import voyageai
 
         self.documents = documents
+        self.cache_dir = cache_dir or self.DEFAULT_CACHE_DIR
         self.client = voyageai.Client(api_key=api_key)
 
         texts = [doc["text"][:self.MAX_DOC_CHARS] for doc in documents]
@@ -113,17 +120,16 @@ class VoyageRetriever(BaseRetriever):
         if cache_path is not None:
             self._save_cache(cache_path, self.embeddings)
 
-    @classmethod
-    def _cache_path(cls, texts: list[str]) -> Path:
+    def _cache_path(self, texts: list[str]) -> Path:
         """Derive a deterministic cache file path from corpus content + model."""
         hasher = hashlib.sha256()
-        hasher.update(cls.EMBED_MODEL.encode("utf-8"))
+        hasher.update(self.EMBED_MODEL.encode("utf-8"))
         hasher.update(str(len(texts)).encode("utf-8"))
         for t in texts:
             hasher.update(t.encode("utf-8", errors="replace"))
             hasher.update(b"\x00")
         digest = hasher.hexdigest()[:16]
-        return cls.CACHE_DIR / f"voyage_{cls.EMBED_MODEL}_{len(texts)}_{digest}.npz"
+        return self.cache_dir / f"voyage_{self.EMBED_MODEL}_{len(texts)}_{digest}.npz"
 
     @staticmethod
     def _load_cache(path: Path) -> np.ndarray | None:
