@@ -1,0 +1,10 @@
+# Data files now live in GCS — no need to upload them with the source.
+data/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+tests/
+*.egg-info/
