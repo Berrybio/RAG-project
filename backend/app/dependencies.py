@@ -1,15 +1,32 @@
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 
 from .config import settings
+from .core import analytics
 from .core.feedback import FeedbackPaths, load_aliases
 from .core.feedback_examples import FeedbackExampleStore
 from .core.feedback_reranker import compute_source_scores
 from .core.llm import BaseLLMProvider, get_llm_provider
 from .core.pipeline import ClinicalTrialRAG
 from .core.protocol_history import ProtocolHistoryPaths
+
+logger = logging.getLogger(__name__)
+
+
+def _init_supabase():
+    if not settings.supabase_url or not settings.supabase_service_role_key:
+        return None
+    try:
+        from supabase import create_client
+        client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        logger.info("Supabase client initialized for persistent feedback storage")
+        return client
+    except Exception:
+        logger.exception("Failed to initialize Supabase client; falling back to file storage")
+        return None
 
 
 @asynccontextmanager
@@ -26,19 +43,16 @@ async def lifespan(app: FastAPI):
         retriever_type=settings.retriever_type,
         voyage_api_key=settings.voyage_api_key,
     )
-    # Feedback log + alias dictionary live next to the trial CSV.
+    supabase_client = _init_supabase()
+    analytics.configure(supabase_client)
     data_dir = Path(settings.csv_path).resolve().parent
-    feedback_paths = FeedbackPaths.from_data_dir(data_dir)
+    feedback_paths = FeedbackPaths.from_data_dir(data_dir, supabase_client=supabase_client)
     app.state.pipeline = pipeline
     app.state.llm = llm
     app.state.feedback_paths = feedback_paths
     app.state.aliases = load_aliases(feedback_paths)
-    # Reranker scores + few-shot examples are derived from the same feedback
-    # log. Both are rebuilt on each /api/feedback POST so the next request
-    # already feels the change without restarting the server.
     app.state.source_scores = compute_source_scores(feedback_paths)
     app.state.examples = FeedbackExampleStore.load(feedback_paths)
-    # Per-user protocol history: created lazily under data/protocols/<user_id>/.
     app.state.protocol_history_paths = ProtocolHistoryPaths.from_data_dir(data_dir)
     yield
 

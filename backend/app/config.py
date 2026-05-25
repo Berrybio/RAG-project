@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # when llm_model is empty. New deploys should set LLM_MODEL instead.
     claude_model: str = "claude-sonnet-4-20250514"
 
+    # ----- Supabase (persistent feedback storage) -----
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+
     log_level: str = "info"
     allowed_origins: str = "http://localhost:3000,http://localhost:80,http://localhost:5173"
 
