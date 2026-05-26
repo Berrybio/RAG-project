@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from ..core.analytics import log_event
-from ..dependencies import get_identity, get_pipeline, get_source_scores
+from ..dependencies import get_identity, get_pipeline_manager, get_source_scores
 from ..models.schemas import SearchRequest, SearchResponse, SourceDoc
 from ..core.pipeline import ClinicalTrialRAG
+from ..core.pipeline_manager import PipelineManager
 
 router = APIRouter()
 
@@ -61,11 +62,12 @@ def _to_source_doc(doc: dict) -> SourceDoc:
 @router.post("/search", response_model=SearchResponse)
 async def search_trials(
     body: SearchRequest,
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    manager: PipelineManager = Depends(get_pipeline_manager),
     source_scores: dict = Depends(get_source_scores),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
+    pipeline = await manager.get_pipeline(body.cancer_type)
     answer, sources = await pipeline.ask(
         body.query, top_k=body.top_k, source_scores=source_scores,
     )
@@ -73,6 +75,7 @@ async def search_trials(
         "query_received",
         endpoint="search",
         query_text=body.query,
+        cancer_type=body.cancer_type,
         num_sources=len(sources),
         latency_ms=int((time.monotonic() - started) * 1000),
         **identity,
@@ -87,21 +90,21 @@ async def search_trials(
 async def search_trials_stream(
     query: str = Query(..., min_length=1),
     top_k: int = Query(default=5, ge=1, le=20),
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    cancer_type: str = Query(default="breast_cancer"),
+    manager: PipelineManager = Depends(get_pipeline_manager),
     source_scores: dict = Depends(get_source_scores),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
+    pipeline = await manager.get_pipeline(cancer_type)
     stream, sources = await pipeline.ask_stream(
         query, top_k=top_k, source_scores=source_scores,
     )
-    # Log retrieval as soon as sources are known. We don't wait for the full
-    # streaming generation to finish — for analytics, "the user asked and got
-    # N candidates back" is the event worth recording.
     log_event(
         "query_received",
         endpoint="search_stream",
         query_text=query,
+        cancer_type=cancer_type,
         num_sources=len(sources),
         latency_ms=int((time.monotonic() - started) * 1000),
         **identity,

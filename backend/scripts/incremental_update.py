@@ -1,18 +1,19 @@
 """Bi-weekly incremental data refresh for the clinical-trial RAG pipeline.
 
-Pulls newly created or recently updated breast-cancer trials from the
-ClinicalTrials.gov API, merges them into the existing CSV, incrementally
-re-embeds only changed documents, and uploads the updated artefacts to GCS.
+Supports refreshing a single cancer type or all 13 registered types.
+Pulls recently updated trials from the ClinicalTrials.gov API, merges
+them into the existing CSV, incrementally re-embeds only changed
+documents, and uploads the updated artefacts to GCS.
 
 Designed to run as a Cloud Run Job on a bi-weekly Cloud Scheduler trigger.
 
 Usage (local testing):
     python -m scripts.incremental_update --bucket berrybio-rag-data --dry-run
+    python -m scripts.incremental_update --bucket berrybio-rag-data --cancer-type lung_cancer
+    python -m scripts.incremental_update --bucket berrybio-rag-data --all
 
 Environment variables (Cloud Run Job):
     GCS_BUCKET              — required
-    GCS_CSV_BLOB            — default: data/breast_cancer_trials.csv
-    GCS_EMBEDDINGS_PREFIX   — default: data/embeddings_cache/
     VOYAGE_API_KEY          — required for re-embedding
     CLOUD_RUN_SERVICE       — if set, triggers a rolling restart after upload
     GCP_REGION              — default: us-central1
@@ -45,6 +46,7 @@ from scripts.pull_clinical_trials import (
     REQUEST_DELAY,
 )
 from app.core.data import load_clinical_trials, build_documents
+from app.cancer_registry import CANCER_TYPES, gcs_csv_blob, gcs_embeddings_prefix
 
 logging.basicConfig(
     level=logging.INFO,
@@ -175,12 +177,7 @@ def incremental_embed(
     voyage_api_key: str,
     dry_run: bool = False,
 ) -> Path:
-    """Build or update the embeddings cache.
-
-    Strategy: maintain a sidecar JSON mapping nctId → text_hash. On each run,
-    only re-embed rows whose text changed. Then rebuild the single .npz cache
-    file the retriever expects.
-    """
+    """Build or update the embeddings cache."""
     import voyageai
 
     sidecar_path = cache_dir / "text_hashes.json"
@@ -245,7 +242,6 @@ def incremental_embed(
         norms[norms == 0] = 1.0
         matrix = matrix / norms
 
-        # Save per-nct store for future incremental runs
         cache_dir.mkdir(parents=True, exist_ok=True)
         if not dry_run:
             np.savez_compressed(per_nct_path, **existing_embeddings)
@@ -265,7 +261,7 @@ def incremental_embed(
             np.savez_compressed(cache_path, embeddings=matrix)
             logger.info("Saved retriever cache: %s (shape=%s)", cache_path.name, matrix.shape)
 
-        # Clean up old cache files that no longer match the corpus hash
+        # Clean up old cache files
         for old_file in cache_dir.glob("voyage_*.npz"):
             if old_file.name != cache_filename and old_file.name != "per_nct_embeddings.npz":
                 old_file.unlink()
@@ -279,7 +275,7 @@ def incremental_embed(
 
 
 # ---------------------------------------------------------------------------
-# 4. GCS upload
+# 4. GCS upload (per cancer type)
 # ---------------------------------------------------------------------------
 
 def upload_to_gcs(
@@ -297,14 +293,14 @@ def upload_to_gcs(
     # Upload CSV
     blob = bucket.blob(csv_blob)
     blob.upload_from_filename(str(csv_path))
-    logger.info("Uploaded CSV → gs://%s/%s", bucket_name, csv_blob)
+    logger.info("Uploaded CSV -> gs://%s/%s", bucket_name, csv_blob)
 
     # Upload embeddings
     for f in sorted(cache_dir.glob("*.npz")):
         blob_name = f"{embeddings_prefix.rstrip('/')}/{f.name}"
         blob = bucket.blob(blob_name)
         blob.upload_from_filename(str(f))
-        logger.info("Uploaded %s → gs://%s/%s", f.name, bucket_name, blob_name)
+        logger.info("Uploaded %s -> gs://%s/%s", f.name, bucket_name, blob_name)
 
     # Upload sidecar
     sidecar = cache_dir / "text_hashes.json"
@@ -340,59 +336,62 @@ def trigger_restart(service: str, region: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# 6. Process a single cancer type end-to-end
 # ---------------------------------------------------------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Incremental clinical-trial data refresh")
-    parser.add_argument("--bucket", default=os.environ.get("GCS_BUCKET", ""))
-    parser.add_argument("--csv-blob", default=os.environ.get("GCS_CSV_BLOB", "data/breast_cancer_trials.csv"))
-    parser.add_argument("--embeddings-prefix", default=os.environ.get("GCS_EMBEDDINGS_PREFIX", "data/embeddings_cache/"))
-    parser.add_argument("--voyage-api-key", default=os.environ.get("VOYAGE_API_KEY", ""))
-    parser.add_argument("--lookback-days", type=int, default=15)
-    parser.add_argument("--service", default=os.environ.get("CLOUD_RUN_SERVICE", ""))
-    parser.add_argument("--region", default=os.environ.get("GCP_REGION", "us-central1"))
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--local-csv", default="", help="Use a local CSV instead of downloading from GCS")
-    args = parser.parse_args()
+def process_cancer_type(
+    cancer_type: str,
+    bucket: str,
+    voyage_api_key: str,
+    lookback_days: int,
+    dry_run: bool,
+) -> dict:
+    """Run the full incremental update for one cancer type.
 
-    if not args.bucket:
-        parser.error("--bucket or GCS_BUCKET is required")
+    Returns a summary dict: {cancer_type, n_new, n_updated, total, skipped}.
+    """
+    ct_info = CANCER_TYPES[cancer_type]
+    condition = ct_info["condition_query"]
+    csv_blob = gcs_csv_blob(cancer_type)
+    emb_prefix = gcs_embeddings_prefix(cancer_type)
 
-    work_dir = Path(tempfile.mkdtemp(prefix="rag_update_"))
-    logger.info("Working directory: %s", work_dir)
+    logger.info("=" * 60)
+    logger.info("Processing %s (condition=%r)", cancer_type, condition)
+    logger.info("=" * 60)
+
+    work_dir = Path(tempfile.mkdtemp(prefix=f"rag_update_{cancer_type}_"))
+    csv_path = work_dir / "trials.csv"
 
     # Step 1: Download existing CSV from GCS
-    csv_path = work_dir / "trials.csv"
-    if args.local_csv:
-        import shutil
-        shutil.copy2(args.local_csv, csv_path)
-    else:
-        from google.cloud import storage as gcs
-        client = gcs.Client()
-        bucket = client.bucket(args.bucket)
-        blob = bucket.blob(args.csv_blob)
-        if blob.exists():
-            blob.download_to_filename(str(csv_path))
-            logger.info("Downloaded existing CSV from GCS")
-        else:
-            logger.info("No existing CSV in GCS — starting fresh")
+    if not dry_run:
+        try:
+            from google.cloud import storage as gcs_lib
+            client = gcs_lib.Client()
+            bkt = client.bucket(bucket)
+            blob = bkt.blob(csv_blob)
+            if blob.exists():
+                blob.download_to_filename(str(csv_path))
+                logger.info("Downloaded existing CSV from GCS for %s", cancer_type)
+            else:
+                logger.info("No existing CSV in GCS for %s — starting fresh", cancer_type)
+        except Exception:
+            logger.exception("Failed to download CSV from GCS for %s", cancer_type)
 
     # Step 2: Fetch recently updated trials
-    since = datetime.now(timezone.utc) - timedelta(days=args.lookback_days)
-    incoming = fetch_recent_trials(since)
+    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    incoming = fetch_recent_trials(since, condition=condition)
 
     if not incoming:
-        logger.info("No updated trials found — nothing to do")
-        return
+        logger.info("No updated trials found for %s — skipping", cancer_type)
+        return {"cancer_type": cancer_type, "n_new": 0, "n_updated": 0, "total": 0, "skipped": True}
 
     # Step 3: Merge
     existing = load_existing_csv(csv_path)
     merged, n_new, n_updated = merge_trials(existing, incoming)
 
     if n_new == 0 and n_updated == 0:
-        logger.info("No changes after merge — skipping upload")
-        return
+        logger.info("No changes after merge for %s — skipping upload", cancer_type)
+        return {"cancer_type": cancer_type, "n_new": 0, "n_updated": 0, "total": len(merged), "skipped": True}
 
     save_csv(merged, csv_path)
 
@@ -400,36 +399,108 @@ def main() -> None:
     cache_dir = work_dir / "embeddings_cache"
     cache_dir.mkdir(exist_ok=True)
 
-    # Download existing embeddings sidecar + per-nct store from GCS
-    if not args.dry_run:
-        from google.cloud import storage as gcs
-        client = gcs.Client()
-        bucket = client.bucket(args.bucket)
-        for name in ["per_nct_embeddings.npz", "text_hashes.json"]:
-            blob = bucket.blob(f"{args.embeddings_prefix.rstrip('/')}/{name}")
-            if blob.exists():
-                blob.download_to_filename(str(cache_dir / name))
-                logger.info("Downloaded %s from GCS", name)
+    if not dry_run:
+        try:
+            from google.cloud import storage as gcs_lib
+            client = gcs_lib.Client()
+            bkt = client.bucket(bucket)
+            for name in ["per_nct_embeddings.npz", "text_hashes.json"]:
+                blob = bkt.blob(f"{emb_prefix.rstrip('/')}/{name}")
+                if blob.exists():
+                    blob.download_to_filename(str(cache_dir / name))
+                    logger.info("Downloaded %s from GCS for %s", name, cancer_type)
+        except Exception:
+            logger.exception("Failed to download embeddings sidecars from GCS for %s", cancer_type)
 
-    if args.voyage_api_key:
-        incremental_embed(csv_path, cache_dir, args.voyage_api_key, dry_run=args.dry_run)
+    if voyage_api_key:
+        incremental_embed(csv_path, cache_dir, voyage_api_key, dry_run=dry_run)
     else:
-        logger.warning("No VOYAGE_API_KEY — skipping embedding step")
+        logger.warning("No VOYAGE_API_KEY — skipping embedding step for %s", cancer_type)
 
     # Step 5: Upload to GCS
-    if not args.dry_run:
-        upload_to_gcs(csv_path, cache_dir, args.bucket, args.csv_blob, args.embeddings_prefix)
+    if not dry_run:
+        upload_to_gcs(csv_path, cache_dir, bucket, csv_blob, emb_prefix)
     else:
-        logger.info("[DRY RUN] Would upload CSV + embeddings to gs://%s", args.bucket)
+        logger.info("[DRY RUN] Would upload CSV + embeddings for %s", cancer_type)
 
-    # Step 6: Trigger rolling restart
-    if args.service and not args.dry_run:
+    return {
+        "cancer_type": cancer_type,
+        "n_new": n_new,
+        "n_updated": n_updated,
+        "total": len(merged),
+        "skipped": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Incremental clinical-trial data refresh")
+    parser.add_argument("--bucket", default=os.environ.get("GCS_BUCKET", ""))
+    parser.add_argument(
+        "--cancer-type", default=None,
+        help="Single cancer type to refresh (e.g. lung_cancer)"
+    )
+    parser.add_argument(
+        "--all", action="store_true", dest="refresh_all",
+        help="Refresh all 13 cancer types"
+    )
+    parser.add_argument("--voyage-api-key", default=os.environ.get("VOYAGE_API_KEY", ""))
+    parser.add_argument("--lookback-days", type=int, default=15)
+    parser.add_argument("--service", default=os.environ.get("CLOUD_RUN_SERVICE", ""))
+    parser.add_argument("--region", default=os.environ.get("GCP_REGION", "us-central1"))
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    if not args.bucket:
+        parser.error("--bucket or GCS_BUCKET is required")
+
+    # Determine which cancer types to process
+    if args.refresh_all:
+        cancer_types = list(CANCER_TYPES.keys())
+    elif args.cancer_type:
+        if args.cancer_type not in CANCER_TYPES:
+            valid = ", ".join(sorted(CANCER_TYPES))
+            parser.error(f"Unknown cancer type {args.cancer_type!r}. Valid: {valid}")
+        cancer_types = [args.cancer_type]
+    else:
+        # Default: all types (when running as Cloud Run Job)
+        cancer_types = list(CANCER_TYPES.keys())
+
+    logger.info("Refreshing %d cancer type(s): %s", len(cancer_types), ", ".join(cancer_types))
+
+    results = []
+    for ct in cancer_types:
+        result = process_cancer_type(
+            cancer_type=ct,
+            bucket=args.bucket,
+            voyage_api_key=args.voyage_api_key,
+            lookback_days=args.lookback_days,
+            dry_run=args.dry_run,
+        )
+        results.append(result)
+
+    # Summary
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("INCREMENTAL UPDATE SUMMARY")
+    logger.info("=" * 60)
+    any_changes = False
+    for r in results:
+        status = "skipped" if r["skipped"] else f"+{r['n_new']} new, ~{r['n_updated']} updated"
+        logger.info("  %-25s %s (total: %d)", r["cancer_type"], status, r["total"])
+        if not r["skipped"]:
+            any_changes = True
+
+    # Trigger rolling restart once (not per type)
+    if any_changes and args.service and not args.dry_run:
         trigger_restart(args.service, args.region)
-    elif args.service:
+    elif args.service and any_changes:
         logger.info("[DRY RUN] Would restart service %s", args.service)
-
-    logger.info("Incremental update complete: +%d new, ~%d updated, %d total",
-                n_new, n_updated, len(merged))
+    elif not any_changes:
+        logger.info("No changes across any cancer type — no restart needed")
 
 
 if __name__ == "__main__":

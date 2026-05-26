@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from ..cancer_registry import CANCER_TYPES
 from ..core.analytics import log_event
 from ..core.llm import BaseLLMProvider
 from ..core.protocol_history import (
@@ -18,7 +19,7 @@ from ..core.protocol_history import (
 from ..dependencies import (
     get_identity,
     get_llm,
-    get_pipeline,
+    get_pipeline_manager,
     get_protocol_history_paths,
     get_source_scores,
 )
@@ -35,6 +36,7 @@ from ..models.schemas import (
     SourceDoc,
 )
 from ..core.pipeline import ClinicalTrialRAG
+from ..core.pipeline_manager import PipelineManager
 from ..core.protocol import (
     generate_protocol_json,
     generate_protocol_json_stream,
@@ -61,20 +63,23 @@ def _user_id(identity: dict) -> str:
 @router.post("/protocol/json", response_model=ProtocolResponse)
 async def create_protocol_json(
     body: ProtocolRequest,
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    manager: PipelineManager = Depends(get_pipeline_manager),
     llm: BaseLLMProvider = Depends(get_llm),
     source_scores: dict = Depends(get_source_scores),
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
     started = time.monotonic()
+    pipeline = await manager.get_pipeline(body.cancer_type)
+    cancer_display = CANCER_TYPES.get(body.cancer_type, {}).get(
+        "display_name", body.cancer_type,
+    )
     retrieved = pipeline.retrieve(
         body.query, top_k=body.top_k, source_scores=source_scores,
     )
-    protocol = await generate_protocol_json(llm, body.query, retrieved)
-    # Auto-save as v1 in the per-user history. Best-effort: a failure here
-    # must never break the user's request — we'd rather the protocol came
-    # back without an id than fail the call.
+    protocol = await generate_protocol_json(
+        llm, body.query, retrieved, cancer_type_display=cancer_display,
+    )
     meta = {"id": "", "title": "", "version_count": 0}
     try:
         meta = save_initial(
@@ -84,11 +89,12 @@ async def create_protocol_json(
             summary_brief=body.query,
             source_nct_ids=[d.get("metadata", {}).get("nctId", "") for d in retrieved],
         )
-    except Exception:  # pragma: no cover - persistence is non-critical
+    except Exception:
         logger.exception("Failed to auto-save protocol; returning ungated response")
     log_event(
         "protocol_generated",
         format="json",
+        cancer_type=body.cancer_type,
         phase=protocol.get("phase"),
         study_type=protocol.get("study_type"),
         num_reference_trials=len(retrieved),
@@ -108,7 +114,7 @@ async def create_protocol_json(
 @router.post("/protocol/json-stream")
 async def create_protocol_json_stream(
     body: ProtocolRequest,
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    manager: PipelineManager = Depends(get_pipeline_manager),
     llm: BaseLLMProvider = Depends(get_llm),
     source_scores: dict = Depends(get_source_scores),
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
@@ -123,19 +129,23 @@ async def create_protocol_json_stream(
       - ``error``:   error message if something fails mid-stream
     """
     started = time.monotonic()
+    pipeline = await manager.get_pipeline(body.cancer_type)
+    cancer_display = CANCER_TYPES.get(body.cancer_type, {}).get(
+        "display_name", body.cancer_type,
+    )
     retrieved = pipeline.retrieve(
         body.query, top_k=body.top_k, source_scores=source_scores,
     )
 
     async def event_generator():
-        # Send sources immediately so the frontend can render them.
         source_docs = [_to_source_doc(doc).model_dump() for doc in retrieved]
         yield f"event: sources\ndata: {json.dumps(source_docs)}\n\n"
 
-        # Stream LLM tokens.
         raw_chunks: list[str] = []
         try:
-            async for token in generate_protocol_json_stream(llm, body.query, retrieved):
+            async for token in generate_protocol_json_stream(
+                llm, body.query, retrieved, cancer_type_display=cancer_display,
+            ):
                 raw_chunks.append(token)
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
         except Exception as e:
@@ -143,7 +153,6 @@ async def create_protocol_json_stream(
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
             return
 
-        # Parse the accumulated raw text into a protocol dict.
         raw = "".join(raw_chunks)
         try:
             protocol = _parse_protocol_raw(raw)
@@ -152,7 +161,6 @@ async def create_protocol_json_stream(
             yield f"event: error\ndata: {json.dumps({'message': 'Failed to parse protocol JSON'})}\n\n"
             return
 
-        # Save to history (best-effort).
         meta = {"id": "", "title": "", "version_count": 0}
         try:
             meta = save_initial(
@@ -168,6 +176,7 @@ async def create_protocol_json_stream(
         log_event(
             "protocol_generated",
             format="json_stream",
+            cancer_type=body.cancer_type,
             phase=protocol.get("phase"),
             study_type=protocol.get("study_type"),
             num_reference_trials=len(retrieved),
@@ -198,14 +207,7 @@ async def refine_protocol_stream(
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
-    """SSE streaming variant of /protocol/refine.
-
-    Events:
-      - ``token``: raw text token from the LLM
-      - ``done``:  final JSON with protocol, assistant_message, changed_fields,
-                   protocol_id, version
-      - ``error``: error message if something fails mid-stream
-    """
+    """SSE streaming variant of /protocol/refine."""
     started = time.monotonic()
 
     async def event_generator():
@@ -232,7 +234,6 @@ async def refine_protocol_stream(
             yield f"event: error\ndata: {json.dumps({'message': 'Failed to parse refined protocol'})}\n\n"
             return
 
-        # Save revision (best-effort).
         turn_number = sum(1 for m in body.refinement_messages if m.role == "user")
         latest_user_request = ""
         for m in reversed(body.refinement_messages):
@@ -294,7 +295,6 @@ async def refine_protocol_stream(
 
 
 def _protocol_filename(protocol: dict, extension: str) -> str:
-    """Build a safe filename, falling back to 'protocol' when protocol_id is empty."""
     stem = (protocol.get("protocol_id") or "").strip() or "protocol"
     return f"{stem}.{extension}"
 
@@ -314,14 +314,7 @@ async def refine_protocol(
         refinement_messages=[m.model_dump() for m in body.refinement_messages],
         original_summary=body.original_summary,
     )
-    # turn_number = how many refinement rounds the user has done so far
     turn_number = sum(1 for m in body.refinement_messages if m.role == "user")
-    # Save as the next version under the same history entry. Best-effort:
-    # if the protocol_id is missing or the meta file vanished (manual cleanup),
-    # we fall back to saving as a new initial entry so the work isn't lost.
-    # Capture the user's latest request + assistant note + changed fields so
-    # the saved change_log is rich enough to rebuild version chips on a
-    # future session.
     latest_user_request = ""
     for m in reversed(body.refinement_messages):
         if m.role == "user" and (m.content or "").strip():
@@ -351,9 +344,9 @@ async def refine_protocol(
                     protocol=updated,
                     summary_brief=body.original_summary,
                 )
-            except Exception:  # pragma: no cover
+            except Exception:
                 logger.exception("Refine: fallback save_initial failed too")
-        except Exception:  # pragma: no cover
+        except Exception:
             logger.exception("Refine: save_revision failed")
     log_event(
         "protocol_refined",
@@ -404,11 +397,6 @@ async def list_user_protocols(
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
-    """Return this user's saved protocols, newest-first.
-
-    The frontend renders these as a strip above the planner so the clinician
-    can pick up where they left off across sessions.
-    """
     rows = list_protocols(history_paths, _user_id(identity))
     return ProtocolListResponse(protocols=[ProtocolEntry(**r) for r in rows])
 
@@ -421,13 +409,6 @@ async def load_user_protocol(
     history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
     identity: dict = Depends(get_identity),
 ):
-    """Load a stored protocol for editing.
-
-    With ``include_versions=true`` (used by the planner UI on history load),
-    the response also carries every version of the protocol with its
-    change-log metadata so the version chips + compare-any-two flow work
-    across sessions, not just within the current session's refinements.
-    """
     user_id = _user_id(identity)
     try:
         protocol, meta = load_protocol(
@@ -445,9 +426,6 @@ async def load_user_protocol(
             for entry in load_all_versions(history_paths, user_id, protocol_id):
                 all_versions.append(ProtocolVersionEntry(**entry))
         except FileNotFoundError:
-            # Meta existed for the latest-version load above; the per-version
-            # load shouldn't normally fail. If it does we just return an empty
-            # all_versions list rather than 500'ing the request.
             logger.warning("load_all_versions failed for %s/%s", user_id, protocol_id)
 
     return ProtocolLoadResponse(
@@ -463,10 +441,6 @@ async def create_protocol_pdf(
     body: DocxRequest,
     identity: dict = Depends(get_identity),
 ):
-    """Build and return a PDF rendering of the protocol.
-
-    Reuses DocxRequest since the payload shape ({"protocol": {...}}) is the same.
-    """
     buffer = build_protocol_pdf(body.protocol)
     filename = _protocol_filename(body.protocol, "pdf")
     log_event(

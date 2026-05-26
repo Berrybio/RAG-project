@@ -11,6 +11,7 @@ from .core.feedback_examples import FeedbackExampleStore
 from .core.feedback_reranker import compute_source_scores
 from .core.llm import BaseLLMProvider, get_llm_provider
 from .core.pipeline import ClinicalTrialRAG
+from .core.pipeline_manager import PipelineManager
 from .core.protocol_history import ProtocolHistoryPaths
 
 logger = logging.getLogger(__name__)
@@ -29,39 +30,48 @@ def _init_supabase():
         return None
 
 
-def _resolve_data_paths() -> tuple[str, "Path | None"]:
-    """Return (csv_path, embeddings_cache_dir) based on data_source config."""
-    if settings.data_source == "gcs":
-        from .core.gcs_storage import download_csv, download_embeddings
-
-        logger.info("data_source=gcs — downloading from gs://%s", settings.gcs_bucket)
-        csv_path = str(download_csv(settings.gcs_bucket, settings.gcs_csv_blob))
-        cache_dir = download_embeddings(settings.gcs_bucket, settings.gcs_embeddings_prefix)
-        return csv_path, cache_dir
-    return settings.csv_path, None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Construct the LLM client + RAG pipeline + feedback paths once at startup.
+    """Construct the LLM client + PipelineManager + feedback paths once at startup.
 
     Everything lives on app.state so request handlers can pull what they need
     via FastAPI dependencies; there's no per-request construction cost.
     """
-    csv_path, embeddings_cache_dir = _resolve_data_paths()
     llm = get_llm_provider()
-    pipeline = ClinicalTrialRAG(
-        csv_path=csv_path,
+
+    # Build the multi-cancer PipelineManager (GCS-only).
+    preload_list = [
+        ct.strip()
+        for ct in settings.preload_cancer_types.split(",")
+        if ct.strip()
+    ]
+    manager = PipelineManager(
+        bucket=settings.gcs_bucket,
         llm=llm,
         retriever_type=settings.retriever_type,
         voyage_api_key=settings.voyage_api_key,
-        embeddings_cache_dir=embeddings_cache_dir,
+        max_loaded=settings.max_loaded_pipelines,
     )
+    manager.preload(preload_list)
+
     supabase_client = _init_supabase()
     analytics.configure(supabase_client)
-    data_dir = Path(csv_path).resolve().parent
+
+    # Feedback / protocol history use a data directory.  With GCS-backed
+    # pipelines the CSV lives in a temp dir; use the first preloaded
+    # pipeline's csv_path parent as the canonical data dir.
+    default_ct = preload_list[0] if preload_list else settings.default_cancer_type
+    try:
+        default_pipeline = await manager.get_pipeline(default_ct)
+        data_dir = Path(default_pipeline.csv_path).resolve().parent
+    except Exception:
+        logger.warning("Could not resolve data_dir from default pipeline; using cwd")
+        data_dir = Path.cwd() / "data"
+        data_dir.mkdir(exist_ok=True)
+
     feedback_paths = FeedbackPaths.from_data_dir(data_dir, supabase_client=supabase_client)
-    app.state.pipeline = pipeline
+
+    app.state.pipeline_manager = manager
     app.state.llm = llm
     app.state.feedback_paths = feedback_paths
     app.state.aliases = load_aliases(feedback_paths)
@@ -71,8 +81,12 @@ async def lifespan(app: FastAPI):
     yield
 
 
-def get_pipeline(request: Request) -> ClinicalTrialRAG:
-    return request.app.state.pipeline
+# ---------------------------------------------------------------------------
+# FastAPI dependency helpers
+# ---------------------------------------------------------------------------
+
+def get_pipeline_manager(request: Request) -> PipelineManager:
+    return request.app.state.pipeline_manager
 
 
 def get_llm(request: Request) -> BaseLLMProvider:

@@ -211,6 +211,7 @@ const plannerEls = () => ({
   sendBtn: document.getElementById("planner-send-btn"),
   summarizeBtn: document.getElementById("planner-summarize-btn"),
   resetBtn: document.getElementById("planner-reset-btn"),
+  cancerType: document.getElementById("planner-cancer-type"),
   topk: document.getElementById("planner-topk"),
   topkVal: document.getElementById("planner-topk-val"),
   showLandscape: document.getElementById("planner-show-landscape"),
@@ -818,6 +819,7 @@ async function plannerSend() {
       body: JSON.stringify({
         messages: plannerState.messages,
         top_k: parseInt(e.topk.value),
+        cancer_type: e.cancerType.value,
         include_landscape: e.showLandscape.checked,
         // Active protocol context: when set, the backend injects a brief
         // <active_protocol> hint into the system context so the model can
@@ -995,6 +997,7 @@ async function plannerGenerateProtocol() {
       body: JSON.stringify({
         query: plannerState.lastSummary,
         top_k: parseInt(e.topk.value),
+        cancer_type: e.cancerType.value,
       }),
     });
     if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
@@ -1743,6 +1746,30 @@ function adminInit() {
   }
 }
 
+// --- Cancer type dropdown ---
+async function loadCancerTypes() {
+  try {
+    const resp = await apiFetch(`${API_BASE}/cancer-types`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const select = document.getElementById("planner-cancer-type");
+    if (!select || !data.cancer_types) return;
+    select.innerHTML = "";
+    data.cancer_types.forEach((ct) => {
+      const opt = document.createElement("option");
+      opt.value = ct.key;
+      const countLabel = ct.trial_count != null
+        ? ` (${ct.trial_count.toLocaleString()} trials)`
+        : "";
+      opt.textContent = `${ct.display_name}${countLabel}`;
+      if (ct.key === data.default) opt.selected = true;
+      select.appendChild(opt);
+    });
+  } catch (err) {
+    console.warn("Failed to load cancer types:", err);
+  }
+}
+
 // Wire up planner event listeners
 (function initPlanner() {
   const e = plannerEls();
@@ -1778,7 +1805,7 @@ function adminInit() {
   // Initialize the admin panel if ?admin=1 is in the URL.
   adminInit();
 
-  // Populate the recent-protocols strip on page load. Best-effort: failures
-  // are logged but not toasted (the strip is auxiliary, not blocking).
+  // Populate the cancer-type dropdown and recent-protocols strip on page load.
+  loadCancerTypes();
   refreshRecentProtocols();
 })();

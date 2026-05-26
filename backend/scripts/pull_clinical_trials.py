@@ -1,13 +1,17 @@
 """
-Pull breast cancer clinical trial data from ClinicalTrials.gov API (v2).
+Pull clinical trial data from ClinicalTrials.gov API (v2).
+
+Supports pulling a single cancer type or all 13 registered types.
 
 Usage:
-    python -m scripts.pull_clinical_trials                          # all statuses, all phases
-    python -m scripts.pull_clinical_trials --status RECRUITING      # only recruiting
-    python -m scripts.pull_clinical_trials --phase phase:2          # only phase 2
-    python -m scripts.pull_clinical_trials --dry-run                # fetch first page only
+    python -m scripts.pull_clinical_trials                                  # breast cancer (default)
+    python -m scripts.pull_clinical_trials --cancer-type lung_cancer        # single type
+    python -m scripts.pull_clinical_trials --all                            # all 13 cancer types
+    python -m scripts.pull_clinical_trials --all --dry-run                  # first page each
+    python -m scripts.pull_clinical_trials --status RECRUITING              # only recruiting
+    python -m scripts.pull_clinical_trials --phase phase:2                  # only phase 2
 
-Output is saved to backend/data/ as a timestamped CSV.
+Output is saved to backend/data/<cancer_type>/trials.csv.
 """
 
 import argparse
@@ -409,26 +413,73 @@ def save_to_csv(trials: list[CTData], output_path: str):
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+def _pull_and_save_one(
+    cancer_type: str,
+    condition: str,
+    output_path: str,
+    status: str | None = None,
+    phase: str | None = None,
+    dry_run: bool = False,
+) -> int:
+    """Pull a single cancer type and save to CSV. Returns trial count."""
+    print(f"\n{'=' * 60}")
+    print(f"  Cancer type: {cancer_type}")
+    print(f"  Condition  : {condition}")
+    print(f"  Output     : {output_path}")
+    print(f"  Dry run    : {dry_run}")
+    print(f"{'=' * 60}")
+
+    trials = pull_all_studies(
+        condition=condition,
+        status=status,
+        phase=phase,
+        dry_run=dry_run,
+    )
+
+    if trials:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        save_to_csv(trials, output_path)
+        print(f"  Total: {len(trials)} trials")
+    else:
+        print(f"  No trials found for {cancer_type}.")
+
+    return len(trials) if trials else 0
+
+
 def main():
+    # Import the cancer registry — use a late import to avoid circular deps
+    # when the module is imported standalone without the full app package.
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from app.cancer_registry import CANCER_TYPES
+
     parser = argparse.ArgumentParser(
-        description="Pull breast cancer clinical trial data from ClinicalTrials.gov"
+        description="Pull clinical trial data from ClinicalTrials.gov"
     )
     parser.add_argument(
-        "--condition", default="Breast Cancer",
-        help="Condition to search for (default: 'Breast Cancer')"
+        "--cancer-type", default=None,
+        help="Cancer type key from the registry (e.g. lung_cancer, melanoma). "
+             "Defaults to breast_cancer if neither --cancer-type nor --all is given."
+    )
+    parser.add_argument(
+        "--all", action="store_true", dest="pull_all",
+        help="Pull all 13 registered cancer types"
+    )
+    parser.add_argument(
+        "--condition", default=None,
+        help="Override the ClinicalTrials.gov condition query (advanced use)"
     )
     parser.add_argument(
         "--status", default=None,
-        help="Filter by status, e.g. RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING. "
-             "Omit for all statuses."
+        help="Filter by status, e.g. RECRUITING, COMPLETED."
     )
     parser.add_argument(
         "--phase", default=None,
-        help="Filter by phase, e.g. 'phase:2', 'phase:3'. Omit for all phases."
+        help="Filter by phase, e.g. 'phase:2', 'phase:3'."
     )
     parser.add_argument(
         "--output", default=None,
-        help="Output CSV path. Defaults to backend/data/breast_cancer_trials_YYYY-MM-DD.csv"
+        help="Output CSV path (only for single cancer type pulls)"
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -436,71 +487,59 @@ def main():
     )
     args = parser.parse_args()
 
-    # Build output filename
-    if args.output:
-        output_path = args.output
+    data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+
+    if args.pull_all:
+        # Pull all 13 cancer types
+        print(f"Pulling all {len(CANCER_TYPES)} cancer types...")
+        summary = {}
+        for ct_key, ct_info in CANCER_TYPES.items():
+            ct_dir = os.path.join(data_dir, ct_key)
+            output = os.path.join(ct_dir, "trials.csv")
+            condition = args.condition or ct_info["condition_query"]
+            count = _pull_and_save_one(
+                cancer_type=ct_key,
+                condition=condition,
+                output_path=output,
+                status=args.status,
+                phase=args.phase,
+                dry_run=args.dry_run,
+            )
+            summary[ct_key] = count
+
+        print(f"\n{'=' * 60}")
+        print("Summary")
+        print(f"{'=' * 60}")
+        total = 0
+        for ct_key, count in summary.items():
+            display = CANCER_TYPES[ct_key]["display_name"]
+            print(f"  {display:<25s} {count:>8,} trials")
+            total += count
+        print(f"  {'TOTAL':<25s} {total:>8,} trials")
+
     else:
-        data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
-        os.makedirs(data_dir, exist_ok=True)
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        output_path = os.path.join(data_dir, f"breast_cancer_trials_{date_str}.csv")
+        # Single cancer type
+        ct_key = args.cancer_type or "breast_cancer"
+        if ct_key not in CANCER_TYPES:
+            valid = ", ".join(sorted(CANCER_TYPES))
+            parser.error(f"Unknown cancer type {ct_key!r}. Valid: {valid}")
 
-    print("=" * 60)
-    print("ClinicalTrials.gov Data Puller")
-    print("=" * 60)
-    print(f"  Condition : {args.condition}")
-    print(f"  Status    : {args.status or 'ALL'}")
-    print(f"  Phase     : {args.phase or 'ALL'}")
-    print(f"  Output    : {output_path}")
-    print(f"  Dry run   : {args.dry_run}")
-    print("=" * 60)
+        ct_info = CANCER_TYPES[ct_key]
+        condition = args.condition or ct_info["condition_query"]
+        if args.output:
+            output_path = args.output
+        else:
+            ct_dir = os.path.join(data_dir, ct_key)
+            output_path = os.path.join(ct_dir, "trials.csv")
 
-    trials = pull_all_studies(
-        condition=args.condition,
-        status=args.status,
-        phase=args.phase,
-        dry_run=args.dry_run,
-    )
-
-    if trials:
-        save_to_csv(trials, output_path)
-        print(f"\n📊 Summary:")
-        print(f"   Total trials: {len(trials)}")
-        print(f"   Total columns: {len(fields(CTData))}")
-
-        # Status breakdown
-        statuses = {}
-        for t in trials:
-            statuses[t.oStatus] = statuses.get(t.oStatus, 0) + 1
-        print(f"   By status:")
-        for s, count in sorted(statuses.items(), key=lambda x: -x[1]):
-            print(f"     {s}: {count}")
-
-        # Phase breakdown
-        phases = {}
-        for t in trials:
-            phases[t.phases or "N/A"] = phases.get(t.phases or "N/A", 0) + 1
-        print(f"   By phase:")
-        for p, count in sorted(phases.items(), key=lambda x: -x[1]):
-            print(f"     {p}: {count}")
-
-        # Study type breakdown
-        study_types = {}
-        for t in trials:
-            study_types[t.studyType or "N/A"] = study_types.get(t.studyType or "N/A", 0) + 1
-        print(f"   By study type:")
-        for st, count in sorted(study_types.items(), key=lambda x: -x[1]):
-            print(f"     {st}: {count}")
-
-        # Sponsor class breakdown
-        sponsor_classes = {}
-        for t in trials:
-            sponsor_classes[t.sponsorClass or "N/A"] = sponsor_classes.get(t.sponsorClass or "N/A", 0) + 1
-        print(f"   By sponsor class:")
-        for sc, count in sorted(sponsor_classes.items(), key=lambda x: -x[1]):
-            print(f"     {sc}: {count}")
-    else:
-        print("⚠ No trials found.")
+        _pull_and_save_one(
+            cancer_type=ct_key,
+            condition=condition,
+            output_path=output_path,
+            status=args.status,
+            phase=args.phase,
+            dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":

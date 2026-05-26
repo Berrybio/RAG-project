@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class SearchRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
+    cancer_type: str = "breast_cancer"
 
 
 class SourceDoc(BaseModel):
@@ -58,6 +59,7 @@ class SearchResponse(BaseModel):
 class ProtocolRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=20)
+    cancer_type: str = "breast_cancer"
 
 
 class ProtocolResponse(BaseModel):
@@ -98,10 +100,23 @@ class RefineProtocolResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    trials_loaded: int
+    total_trials_loaded: int
+    loaded_cancer_types: list[dict] = Field(default_factory=list)
+    available_cancer_types: int = 0
     model: str
-    data_source: str = "local"
-    csv_updated_at: str | None = None
+    data_source: str = "gcs"
+
+
+class CancerTypeInfo(BaseModel):
+    key: str
+    display_name: str
+    trial_count: int | None = None
+    loaded: bool = False
+
+
+class CancerTypesResponse(BaseModel):
+    cancer_types: list[CancerTypeInfo]
+    default: str = "breast_cancer"
 
 
 # ---------------------------------------------------------------------------
