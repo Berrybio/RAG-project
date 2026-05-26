@@ -258,6 +258,23 @@ input[type="range"] {
     font-size: 14px;
 }
 
+.stream-preview {
+    text-align: left;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-top: 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+}
+
 .protocol-actions {
     display: flex;
     gap: 12px;
