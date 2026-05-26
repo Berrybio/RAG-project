@@ -21,7 +21,6 @@ class Settings(BaseSettings):
     # ----- Retrieval -----
     voyage_api_key: str = ""
     retriever_type: str = "voyage"  # "voyage" or "tfidf"
-    csv_path: str = "data/breast_cancer_trials_full_2026-04-14.csv"
 
     # Legacy / backward-compat: still read CLAUDE_MODEL from env so existing
     # deploys keep working unchanged. The factory uses this as the fallback
@@ -32,11 +31,14 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
 
-    # ----- GCS (data storage, decoupled from Docker image) -----
-    data_source: str = "local"  # "local" or "gcs"
+    # ----- GCS (all trial data lives on GCS, no local fallback) -----
     gcs_bucket: str = ""
-    gcs_csv_blob: str = "data/breast_cancer_trials.csv"
-    gcs_embeddings_prefix: str = "data/embeddings_cache/"
+    # Comma-separated cancer types to eagerly load at startup.
+    # Types not in this list are loaded on first request (lazy).
+    preload_cancer_types: str = "breast_cancer"
+    # Max pipelines kept in memory at once (LRU eviction beyond this).
+    max_loaded_pipelines: int = 5
+    default_cancer_type: str = "breast_cancer"
 
     log_level: str = "info"
     allowed_origins: str = "http://localhost:3000,http://localhost:80,http://localhost:5173"

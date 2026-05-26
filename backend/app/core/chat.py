@@ -19,8 +19,8 @@ from .llm import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
-CHAT_SYSTEM_PROMPT = """\
-You are a clinical trials research assistant helping a clinician plan a breast cancer trial.
+_CHAT_SYSTEM_PROMPT_TEMPLATE = """\
+You are a clinical trials research assistant helping a clinician plan a {cancer_type} trial.
 
 You have access to retrieved trial data from ClinicalTrials.gov. The most recent user turn may \
 include up to four distinct context blocks:
@@ -374,6 +374,7 @@ async def generate_chat_stream(
     previous_protocols: list[dict] | None = None,
     active_protocol_meta: dict | None = None,
     active_protocol_json: dict | None = None,
+    cancer_type_display: str = "breast cancer",
 ) -> AsyncGenerator[str, None]:
     """Stream the assistant's reply for a multi-turn chat.
 
@@ -407,7 +408,9 @@ async def generate_chat_stream(
         ),
     }
 
-    system_prompt = CHAT_SYSTEM_PROMPT
+    system_prompt = _CHAT_SYSTEM_PROMPT_TEMPLATE.format(
+        cancer_type=cancer_type_display.lower(),
+    )
     aliases_block = aliases_prompt_block(aliases or {})
     if aliases_block:
         system_prompt = f"{system_prompt}\n\n{aliases_block}"

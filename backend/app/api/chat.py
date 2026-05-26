@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ..cancer_registry import CANCER_TYPES
 from ..core.analytics import log_event
 from ..core.llm import BaseLLMProvider
 from ..dependencies import (
@@ -15,11 +16,12 @@ from ..dependencies import (
     get_examples,
     get_identity,
     get_llm,
-    get_pipeline,
+    get_pipeline_manager,
     get_protocol_history_paths,
     get_source_scores,
 )
 from ..core.pipeline import ClinicalTrialRAG
+from ..core.pipeline_manager import PipelineManager
 from ..core.chat import generate_chat_stream, summarize_conversation
 from ..core.feedback import expand_query
 from ..core.feedback_examples import FeedbackExampleStore
@@ -56,6 +58,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
+    cancer_type: str = "breast_cancer"
     # When false, skip the deterministic landscape brief (and the drug-class
     # diversification that goes with it). Useful for clinicians who already
     # know exactly what they're looking for and want a focused top-K result.
@@ -78,7 +81,7 @@ class SummarizeResponse(BaseModel):
 @router.post("/chat/stream")
 async def chat_stream(
     body: ChatRequest,
-    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    manager: PipelineManager = Depends(get_pipeline_manager),
     llm: BaseLLMProvider = Depends(get_llm),
     aliases: dict = Depends(get_aliases),
     source_scores: dict = Depends(get_source_scores),
@@ -90,6 +93,8 @@ async def chat_stream(
     if body.messages[-1].role != "user":
         return {"error": "Last message must be from user"}
 
+    pipeline = await manager.get_pipeline(body.cancer_type)
+
     latest_query = body.messages[-1].content
     history = [m.model_dump() for m in body.messages]
     turn_number = sum(1 for m in body.messages if m.role == "user")
@@ -97,6 +102,7 @@ async def chat_stream(
         "chat_message",
         turn_number=turn_number,
         query_text=latest_query,
+        cancer_type=body.cancer_type,
         include_landscape=body.include_landscape,
         **identity,
     )
@@ -172,9 +178,6 @@ async def chat_stream(
 
     # Detect "based on the previous protocol" hints in the user's message and
     # surface ALL their stored protocols as clickable load chips in the UI.
-    # The list (capped, ranked by relevance) is also injected into the LLM's
-    # user message as a <previous_protocols> hint so the model acknowledges
-    # them rather than gaslighting the user with "no protocol exists".
     protocol_matches: list[dict] = []
     if query_mentions_previous_protocol(latest_query):
         try:
@@ -185,9 +188,7 @@ async def chat_stream(
             logger.exception("Failed to match previous protocols for chat hint")
 
     # Resolve the active-protocol meta + latest JSON. When the frontend passes
-    # active_protocol_id, the planner has one open in the preview pane; we
-    # surface that to the LLM so it can answer questions about the protocol
-    # without the user having to paste it back into chat.
+    # active_protocol_id, the planner has one open in the preview pane.
     active_protocol_meta: dict | None = None
     active_protocol_json: dict | None = None
     if body.active_protocol_id:
@@ -203,10 +204,16 @@ async def chat_stream(
         except Exception:  # pragma: no cover - non-critical
             logger.exception("Failed to load active protocol for chat context")
 
+    # Resolve display name for cancer type (used in system prompt).
+    cancer_display = CANCER_TYPES.get(body.cancer_type, {}).get(
+        "display_name", body.cancer_type,
+    )
+
     log_event(
         "query_received",
         endpoint="chat_stream",
         query_text=latest_query,
+        cancer_type=body.cancer_type,
         num_sources=len(retrieved),
         landscape_emitted=bool(landscape and merged_filters != prior_filters),
         protocol_matches=len(protocol_matches) or None,
@@ -215,16 +222,10 @@ async def chat_stream(
     )
 
     async def event_generator():
-        # Deterministic landscape brief over the full corpus. Emit whenever the
-        # current turn introduces a new filter (disease / phase / status); also
-        # fires on the first turn since prior_filters is empty there.
+        # Deterministic landscape brief over the full corpus.
         if landscape and merged_filters != prior_filters:
             yield f"event: landscape\ndata: {json.dumps(landscape)}\n\n"
 
-        # If the user said "based on the previous protocol" (or similar) and we
-        # found one or more candidates, emit them so the frontend can render
-        # clickable load chips. The reply itself proceeds normally — the chip
-        # is an additional offer, not a redirect.
         if protocol_matches:
             yield (
                 "event: protocol_match\n"
@@ -241,6 +242,7 @@ async def chat_stream(
                 previous_protocols=protocol_matches,
                 active_protocol_meta=active_protocol_meta,
                 active_protocol_json=active_protocol_json,
+                cancer_type_display=cancer_display,
             ):
                 yield f"event: token\ndata: {json.dumps(token)}\n\n"
             yield "event: done\ndata: {}\n\n"

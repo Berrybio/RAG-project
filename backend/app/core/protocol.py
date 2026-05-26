@@ -27,10 +27,10 @@ from .llm import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
-PROTOCOL_SYSTEM_PROMPT = """\
+_PROTOCOL_SYSTEM_PROMPT_TEMPLATE = """\
 You are an expert clinical research physician who designs clinical trial and
 real-world evidence study protocols. Given a set of reference trials retrieved
-from ClinicalTrials.gov, draft a NEW breast cancer study protocol.
+from ClinicalTrials.gov, draft a NEW {cancer_type} study protocol.
 
 First, INFER THE STUDY TYPE from the user's query:
 - If the query mentions "real-world evidence", "RWE", "retrospective", "cohort",
@@ -51,7 +51,7 @@ these keys:
   "sponsor": "",
   "phase": "Phase II (or Phase I / III / IV; use 'N/A' for observational / RWE)",
   "status": "PLANNED",
-  "conditions": "Specific breast cancer subtype(s)",
+  "conditions": "Specific cancer subtype(s) relevant to the study",
   "summary": "2-3 sentence plain-language summary",
   "description": "Detailed scientific background and rationale (2-3 paragraphs covering unmet need, mechanism of action, preclinical/Phase I evidence)",
   "primary_objectives": ["objective 1", "..."],
@@ -144,16 +144,24 @@ OBSERVATIONAL / RWE ADAPTATIONS (when phase is "N/A"):
   analyses for unmeasured confounding, target trial emulation framework)."""
 
 
+def _get_protocol_system_prompt(cancer_type_display: str = "breast cancer") -> str:
+    return _PROTOCOL_SYSTEM_PROMPT_TEMPLATE.format(
+        cancer_type=cancer_type_display.lower(),
+    )
+
+
 async def generate_protocol_json(
     llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
+    cancer_type_display: str = "breast cancer",
 ) -> dict:
     """Ask the LLM to draft a protocol based on RAG-retrieved trials; return parsed JSON dict."""
     context = format_context(retrieved_docs)
+    system_prompt = _get_protocol_system_prompt(cancer_type_display)
 
     user_msg = (
-        f"The user wants to plan a breast cancer study with this focus:\n"
+        f"The user wants to plan a {cancer_type_display.lower()} study with this focus:\n"
         f'"{query}"\n\n'
         f"=== REFERENCE TRIALS FROM DATABASE ===\n{context}\n"
         f"=== END ===\n\n"
@@ -164,13 +172,9 @@ async def generate_protocol_json(
         f"label it as Phase II anywhere."
     )
 
-    # Use streaming for long generations (max_tokens=8192). Non-streaming
-    # requests with high max_tokens can exceed the API gateway timeout and
-    # fail with APIConnectionError. Streaming keeps the connection warm
-    # token-by-token; complete() accumulates the full response.
     raw = (
         await llm.complete(
-            system=PROTOCOL_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_msg}],
             max_tokens=8192,
         )
@@ -184,11 +188,15 @@ async def generate_protocol_json(
     return protocol
 
 
-def _build_generate_user_msg(query: str, retrieved_docs: list[dict]) -> str:
+def _build_generate_user_msg(
+    query: str,
+    retrieved_docs: list[dict],
+    cancer_type_display: str = "breast cancer",
+) -> str:
     """Build the user message for protocol generation (shared by sync + stream)."""
     context = format_context(retrieved_docs)
     return (
-        f"The user wants to plan a breast cancer study with this focus:\n"
+        f"The user wants to plan a {cancer_type_display.lower()} study with this focus:\n"
         f'"{query}"\n\n'
         f"=== REFERENCE TRIALS FROM DATABASE ===\n{context}\n"
         f"=== END ===\n\n"
@@ -204,15 +212,17 @@ async def generate_protocol_json_stream(
     llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
+    cancer_type_display: str = "breast cancer",
 ) -> AsyncIterator[str]:
     """Stream LLM tokens for protocol generation.
 
     Yields raw text tokens as they arrive. The caller is responsible for
     accumulating them, stripping markdown fences, and JSON-parsing.
     """
-    user_msg = _build_generate_user_msg(query, retrieved_docs)
+    system_prompt = _get_protocol_system_prompt(cancer_type_display)
+    user_msg = _build_generate_user_msg(query, retrieved_docs, cancer_type_display)
     async for token in llm.stream(
-        system=PROTOCOL_SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[{"role": "user", "content": user_msg}],
         max_tokens=8192,
     ):
@@ -301,7 +311,7 @@ def parse_refine_output(raw: str) -> tuple[dict, str, list[str]]:
 
 
 REFINE_SYSTEM_PROMPT = """\
-You are revising an existing breast-cancer study protocol JSON. The request
+You are revising an existing clinical study protocol JSON. The request
 may take one of three shapes:
 
 (a) A single targeted edit ("change the comparator to pembrolizumab").

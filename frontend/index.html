@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Clinical Trial RAG</title>
-    <link rel="stylesheet" href="styles.css?v=20">
+    <link rel="stylesheet" href="styles.css?v=21">
 </head>
 <body>
     <header>
         <h1>Clinical Trial RAG</h1>
-        <p class="subtitle">Breast Cancer Trial Planner</p>
+        <p class="subtitle">Clinical Trial Planner</p>
     </header>
 
     <main>
@@ -29,8 +29,14 @@
             </div>
 
             <div class="input-group">
-                <textarea id="planner-input" placeholder="e.g. 'Show me Phase 2 CDK4/6 trials for HR+/HER2- metastatic breast cancer', then follow up with design questions." rows="2"></textarea>
+                <textarea id="planner-input" placeholder="e.g. 'Show me Phase 2 checkpoint inhibitor trials currently recruiting', then follow up with design questions." rows="2"></textarea>
                 <div class="controls">
+                    <label>
+                        Cancer type:
+                        <select id="planner-cancer-type">
+                            <option value="breast_cancer" selected>Breast Cancer</option>
+                        </select>
+                    </label>
                     <label>
                         Top K:
                         <input type="range" id="planner-topk" min="1" max="20" value="5">
@@ -127,6 +133,6 @@
         <p>Powered by Claude &middot; Data from ClinicalTrials.gov &middot; <a href="#" id="admin-link">Admin</a></p>
     </footer>
 
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=27"></script>
 </body>
 </html>

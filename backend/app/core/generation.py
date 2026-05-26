@@ -5,8 +5,8 @@ from .llm import BaseLLMProvider
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a clinical trials assistant specializing in breast cancer research.
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are a clinical trials assistant specializing in {cancer_type} research.
 
 CRITICAL GROUNDING RULES — violation of these rules is a failure:
 - You will be given a <trials> section containing the ONLY trial data you may use.
@@ -114,10 +114,15 @@ def _assistant_prefill(retrieved_docs: list[dict]) -> str:
     )
 
 
+def _get_system_prompt(cancer_type_display: str = "breast cancer") -> str:
+    return _SYSTEM_PROMPT_TEMPLATE.format(cancer_type=cancer_type_display.lower())
+
+
 async def generate_answer(
     llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
+    cancer_type_display: str = "breast cancer",
 ) -> str:
     """Send the query + retrieved context to the LLM and return the full answer.
 
@@ -127,9 +132,10 @@ async def generate_answer(
     prepend it to the returned text. Other providers will naturally pick up
     the same opening style from the system prompt.
     """
+    system_prompt = _get_system_prompt(cancer_type_display)
     prefill = _assistant_prefill(retrieved_docs)
     body = await llm.complete(
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[
             {"role": "user", "content": _build_user_message(query, retrieved_docs)},
         ],
@@ -142,12 +148,14 @@ async def generate_answer_stream(
     llm: BaseLLMProvider,
     query: str,
     retrieved_docs: list[dict],
+    cancer_type_display: str = "breast cancer",
 ) -> AsyncGenerator[str, None]:
     """Stream answer tokens as an async generator for SSE."""
+    system_prompt = _get_system_prompt(cancer_type_display)
     prefill = _assistant_prefill(retrieved_docs)
     yield prefill
     async for text in llm.stream(
-        system=SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[
             {"role": "user", "content": _build_user_message(query, retrieved_docs)},
         ],
