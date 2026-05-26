@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 
@@ -36,9 +37,13 @@ from ..models.schemas import (
 from ..core.pipeline import ClinicalTrialRAG
 from ..core.protocol import (
     generate_protocol_json,
+    generate_protocol_json_stream,
     refine_protocol_json,
+    refine_protocol_json_stream,
     build_protocol_docx,
     build_protocol_pdf,
+    _parse_protocol_raw,
+    parse_refine_output,
 )
 from ..api.search import _to_source_doc
 
@@ -97,6 +102,194 @@ async def create_protocol_json(
         protocol_id=meta.get("id", ""),
         version=int(meta.get("version_count", 0) or 0),
         title=meta.get("title", ""),
+    )
+
+
+@router.post("/protocol/json-stream")
+async def create_protocol_json_stream(
+    body: ProtocolRequest,
+    pipeline: ClinicalTrialRAG = Depends(get_pipeline),
+    llm: BaseLLMProvider = Depends(get_llm),
+    source_scores: dict = Depends(get_source_scores),
+    history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
+    identity: dict = Depends(get_identity),
+):
+    """SSE streaming variant of /protocol/json.
+
+    Events:
+      - ``sources``: JSON array of reference trials (sent immediately)
+      - ``token``:   raw text token from the LLM (many events)
+      - ``done``:    final JSON with protocol, protocol_id, version, title
+      - ``error``:   error message if something fails mid-stream
+    """
+    started = time.monotonic()
+    retrieved = pipeline.retrieve(
+        body.query, top_k=body.top_k, source_scores=source_scores,
+    )
+
+    async def event_generator():
+        # Send sources immediately so the frontend can render them.
+        source_docs = [_to_source_doc(doc).model_dump() for doc in retrieved]
+        yield f"event: sources\ndata: {json.dumps(source_docs)}\n\n"
+
+        # Stream LLM tokens.
+        raw_chunks: list[str] = []
+        try:
+            async for token in generate_protocol_json_stream(llm, body.query, retrieved):
+                raw_chunks.append(token)
+                yield f"event: token\ndata: {json.dumps(token)}\n\n"
+        except Exception as e:
+            logger.exception("Protocol stream failed")
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            return
+
+        # Parse the accumulated raw text into a protocol dict.
+        raw = "".join(raw_chunks)
+        try:
+            protocol = _parse_protocol_raw(raw)
+        except Exception as e:
+            logger.exception("Protocol JSON parse failed")
+            yield f"event: error\ndata: {json.dumps({'message': 'Failed to parse protocol JSON'})}\n\n"
+            return
+
+        # Save to history (best-effort).
+        meta = {"id": "", "title": "", "version_count": 0}
+        try:
+            meta = save_initial(
+                history_paths,
+                user_id=_user_id(identity),
+                protocol=protocol,
+                summary_brief=body.query,
+                source_nct_ids=[d.get("metadata", {}).get("nctId", "") for d in retrieved],
+            )
+        except Exception:
+            logger.exception("Failed to auto-save protocol")
+
+        log_event(
+            "protocol_generated",
+            format="json_stream",
+            phase=protocol.get("phase"),
+            study_type=protocol.get("study_type"),
+            num_reference_trials=len(retrieved),
+            protocol_id=meta.get("id") or None,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            **identity,
+        )
+
+        done_payload = {
+            "protocol": protocol,
+            "protocol_id": meta.get("id", ""),
+            "version": int(meta.get("version_count", 0) or 0),
+            "title": meta.get("title", ""),
+        }
+        yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/protocol/refine-stream")
+async def refine_protocol_stream(
+    body: RefineProtocolRequest,
+    llm: BaseLLMProvider = Depends(get_llm),
+    history_paths: ProtocolHistoryPaths = Depends(get_protocol_history_paths),
+    identity: dict = Depends(get_identity),
+):
+    """SSE streaming variant of /protocol/refine.
+
+    Events:
+      - ``token``: raw text token from the LLM
+      - ``done``:  final JSON with protocol, assistant_message, changed_fields,
+                   protocol_id, version
+      - ``error``: error message if something fails mid-stream
+    """
+    started = time.monotonic()
+
+    async def event_generator():
+        raw_chunks: list[str] = []
+        try:
+            async for token in refine_protocol_json_stream(
+                llm,
+                current_protocol=body.protocol,
+                refinement_messages=[m.model_dump() for m in body.refinement_messages],
+                original_summary=body.original_summary,
+            ):
+                raw_chunks.append(token)
+                yield f"event: token\ndata: {json.dumps(token)}\n\n"
+        except Exception as e:
+            logger.exception("Refine stream failed")
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+            return
+
+        raw = "".join(raw_chunks)
+        try:
+            updated, note, changed = parse_refine_output(raw)
+        except Exception as e:
+            logger.exception("Refine output parse failed")
+            yield f"event: error\ndata: {json.dumps({'message': 'Failed to parse refined protocol'})}\n\n"
+            return
+
+        # Save revision (best-effort).
+        turn_number = sum(1 for m in body.refinement_messages if m.role == "user")
+        latest_user_request = ""
+        for m in reversed(body.refinement_messages):
+            if m.role == "user" and (m.content or "").strip():
+                latest_user_request = m.content
+                break
+
+        new_meta: dict = {"id": body.protocol_id, "version_count": 0}
+        if body.protocol_id:
+            try:
+                new_meta = save_revision(
+                    history_paths,
+                    user_id=_user_id(identity),
+                    protocol_id=body.protocol_id,
+                    protocol=updated,
+                    user_request=latest_user_request,
+                    assistant_note=note,
+                    changed_fields=changed,
+                )
+            except FileNotFoundError:
+                logger.warning("Refine-stream: protocol_id %s not found; saving as new", body.protocol_id)
+                try:
+                    new_meta = save_initial(
+                        history_paths,
+                        user_id=_user_id(identity),
+                        protocol=updated,
+                        summary_brief=body.original_summary,
+                    )
+                except Exception:
+                    logger.exception("Refine-stream: fallback save_initial failed")
+            except Exception:
+                logger.exception("Refine-stream: save_revision failed")
+
+        log_event(
+            "protocol_refined",
+            turn_number=turn_number,
+            sections_changed=changed,
+            num_sections_changed=len(changed) if changed else 0,
+            protocol_id=new_meta.get("id") or None,
+            version=int(new_meta.get("version_count", 0) or 0) or None,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            **identity,
+        )
+
+        done_payload = {
+            "protocol": updated,
+            "assistant_message": note,
+            "changed_fields": changed,
+            "protocol_id": new_meta.get("id", ""),
+            "version": int(new_meta.get("version_count", 0) or 0),
+        }
+        yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

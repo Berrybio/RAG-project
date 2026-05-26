@@ -979,12 +979,17 @@ async function plannerGenerateProtocol() {
   const e = plannerEls();
   if (!plannerState.lastSummary) return;
 
+  const loadingText = document.getElementById("planner-protocol-loading-text");
+  const streamPreview = document.getElementById("planner-protocol-stream-preview");
+
   e.protocolLoading.classList.remove("hidden");
   e.protocolResult.classList.add("hidden");
   e.genProtocolBtn.disabled = true;
+  if (loadingText) loadingText.textContent = "Generating protocol from the conversation summary...";
+  if (streamPreview) { streamPreview.textContent = ""; streamPreview.classList.add("hidden"); }
 
   try {
-    const resp = await apiFetch(`${API_BASE}/protocol/json`, {
+    const resp = await apiFetch(`${API_BASE}/protocol/json-stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -992,8 +997,62 @@ async function plannerGenerateProtocol() {
         top_k: parseInt(e.topk.value),
       }),
     });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-    const data = await resp.json();
+    if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let rawText = "";
+    let data = null;
+    let tokenCount = 0;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = rawEvent.split("\n");
+        let evt = "message";
+        let eventData = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) evt = line.slice(6).trim();
+          else if (line.startsWith("data:")) eventData += line.slice(5).trim();
+        }
+        if (!eventData) continue;
+
+        if (evt === "token") {
+          try {
+            const tok = JSON.parse(eventData);
+            rawText += tok;
+            tokenCount++;
+            // Show streaming preview after first few tokens.
+            if (tokenCount === 3 && streamPreview) {
+              streamPreview.classList.remove("hidden");
+              if (loadingText) loadingText.textContent = "Drafting protocol — streaming from LLM...";
+            }
+            if (streamPreview) {
+              // Show last ~600 chars of streaming output for a live preview.
+              const preview = rawText.length > 600 ? "…" + rawText.slice(-600) : rawText;
+              streamPreview.textContent = preview;
+              streamPreview.scrollTop = streamPreview.scrollHeight;
+            }
+          } catch {}
+        } else if (evt === "done") {
+          try { data = JSON.parse(eventData); } catch {}
+        } else if (evt === "error") {
+          let msg = "Unknown error";
+          try { msg = JSON.parse(eventData).message; } catch {}
+          throw new Error(msg);
+        }
+      }
+    }
+
+    if (!data || !data.protocol) throw new Error("No protocol received from stream");
+
     plannerState.currentProtocol = data.protocol;
     plannerState.activeProtocolId = data.protocol_id || "";
     plannerState.protocolVersions = [{
@@ -1008,13 +1067,13 @@ async function plannerGenerateProtocol() {
     renderVersionBar();
     renderProtocolPreview(data.protocol, "planner-protocol-preview");
     e.protocolResult.classList.remove("hidden");
-    // Refresh the recent-protocols strip since a new entry was just saved.
     refreshRecentProtocols();
   } catch (err) {
     alert(`Failed to generate protocol: ${err.message}`);
   } finally {
     e.protocolLoading.classList.add("hidden");
     e.genProtocolBtn.disabled = false;
+    if (streamPreview) streamPreview.classList.add("hidden");
   }
 }
 
@@ -1136,7 +1195,7 @@ async function applyRefinementInChat(userText, assistantDiv, contentNode) {
     // The user's current request was already pushed onto plannerState.messages
     // by the caller, so it's the last entry of refineMessages.
 
-    const resp = await apiFetch(`${API_BASE}/protocol/refine`, {
+    const resp = await apiFetch(`${API_BASE}/protocol/refine-stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1146,8 +1205,49 @@ async function applyRefinementInChat(userText, assistantDiv, contentNode) {
         protocol_id: plannerState.activeProtocolId || "",
       }),
     });
-    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-    const data = await resp.json();
+    if (!resp.ok || !resp.body) throw new Error(`Server error: ${resp.status}`);
+
+    // Parse SSE stream for refinement tokens.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let data = null;
+    let tokenCount = 0;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = rawEvent.split("\n");
+        let evt = "message";
+        let eventData = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) evt = line.slice(6).trim();
+          else if (line.startsWith("data:")) eventData += line.slice(5).trim();
+        }
+        if (!eventData) continue;
+
+        if (evt === "token") {
+          tokenCount++;
+          if (tokenCount % 20 === 0) {
+            contentNode.nodeValue = `Applying changes to the protocol… (${tokenCount} tokens)`;
+          }
+        } else if (evt === "done") {
+          try { data = JSON.parse(eventData); } catch {}
+        } else if (evt === "error") {
+          let msg = "Unknown error";
+          try { msg = JSON.parse(eventData).message; } catch {}
+          throw new Error(msg);
+        }
+      }
+    }
+
+    if (!data || !data.protocol) throw new Error("No protocol received from refine stream");
 
     const note = data.assistant_message
       || (data.changed_fields && data.changed_fields.length

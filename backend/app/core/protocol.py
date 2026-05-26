@@ -1,6 +1,7 @@
 import json
 import logging
 from io import BytesIO
+from typing import AsyncIterator
 
 from docx import Document
 from docx.shared import Inches, Pt
@@ -181,6 +182,122 @@ async def generate_protocol_json(
     protocol = json.loads(raw)
     logger.info("Protocol JSON generated with %d keys", len(protocol))
     return protocol
+
+
+def _build_generate_user_msg(query: str, retrieved_docs: list[dict]) -> str:
+    """Build the user message for protocol generation (shared by sync + stream)."""
+    context = format_context(retrieved_docs)
+    return (
+        f"The user wants to plan a breast cancer study with this focus:\n"
+        f'"{query}"\n\n'
+        f"=== REFERENCE TRIALS FROM DATABASE ===\n{context}\n"
+        f"=== END ===\n\n"
+        f"Infer the study type from the user's focus above (interventional "
+        f"phase I-IV, or observational / real-world evidence). Draft the "
+        f"protocol as JSON following the system prompt schema. If the user "
+        f"asked for a real-world evidence / observational study, do NOT "
+        f"label it as Phase II anywhere."
+    )
+
+
+async def generate_protocol_json_stream(
+    llm: BaseLLMProvider,
+    query: str,
+    retrieved_docs: list[dict],
+) -> AsyncIterator[str]:
+    """Stream LLM tokens for protocol generation.
+
+    Yields raw text tokens as they arrive. The caller is responsible for
+    accumulating them, stripping markdown fences, and JSON-parsing.
+    """
+    user_msg = _build_generate_user_msg(query, retrieved_docs)
+    async for token in llm.stream(
+        system=PROTOCOL_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+        max_tokens=8192,
+    ):
+        yield token
+
+
+def _parse_protocol_raw(raw: str) -> dict:
+    """Strip markdown fences and parse protocol JSON from raw LLM output."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0]
+    return json.loads(raw)
+
+
+def _build_refine_user_msg(
+    current_protocol: dict,
+    refinement_messages: list[dict],
+    original_summary: str,
+) -> str:
+    """Build the user message for protocol refinement (shared by sync + stream)."""
+    history_lines = []
+    for msg in refinement_messages[:-1]:
+        role = "Clinician" if msg["role"] == "user" else "Assistant"
+        history_lines.append(f"{role}: {msg['content']}")
+    prior_history = "\n".join(history_lines) if history_lines else "(none)"
+    latest_request = refinement_messages[-1]["content"] if refinement_messages else ""
+
+    return (
+        f"=== ORIGINAL PLANNING BRIEF ===\n{original_summary or '(not provided)'}\n\n"
+        f"=== CURRENT PROTOCOL JSON ===\n{json.dumps(current_protocol, indent=2)}\n\n"
+        f"=== PRIOR REFINEMENT TURNS ===\n{prior_history}\n\n"
+        f"=== CLINICIAN'S CURRENT CORRECTION REQUEST ===\n{latest_request}\n\n"
+        f"Apply the correction. Return the full updated JSON, then the "
+        f"CHANGES: line, then the NOTE: line, per the system prompt."
+    )
+
+
+async def refine_protocol_json_stream(
+    llm: BaseLLMProvider,
+    current_protocol: dict,
+    refinement_messages: list[dict],
+    original_summary: str,
+) -> AsyncIterator[str]:
+    """Stream LLM tokens for protocol refinement.
+
+    Yields raw text tokens as they arrive. The caller accumulates them and
+    uses ``parse_refine_output`` to extract the updated protocol, CHANGES,
+    and NOTE lines.
+    """
+    user_msg = _build_refine_user_msg(
+        current_protocol, refinement_messages, original_summary,
+    )
+    async for token in llm.stream(
+        system=REFINE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_msg}],
+        max_tokens=8192,
+    ):
+        yield token
+
+
+def parse_refine_output(raw: str) -> tuple[dict, str, list[str]]:
+    """Parse the raw LLM output from a refine call into (protocol, note, changed_fields)."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0].strip()
+
+    note = ""
+    changed: list[str] = []
+    json_text = raw
+
+    note_idx = raw.rfind("\nNOTE:")
+    if note_idx != -1:
+        note = raw[note_idx + len("\nNOTE:"):].strip()
+        json_text = raw[:note_idx].rstrip()
+
+    changes_idx = json_text.rfind("\nCHANGES:")
+    if changes_idx != -1:
+        changes_line = json_text[changes_idx + len("\nCHANGES:"):].strip()
+        changed = [k.strip() for k in changes_line.split(",") if k.strip()]
+        json_text = json_text[:changes_idx].rstrip()
+
+    updated = json.loads(json_text)
+    return updated, note, changed
 
 
 REFINE_SYSTEM_PROMPT = """\
